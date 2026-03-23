@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-  "net/http"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -57,7 +57,20 @@ func main() {
 	bot.Debug = false
 	fmt.Printf("🤖 Bot Online: %s\n", bot.Self.UserName)
 
-	// แจ้งเตือนอัตโนมัติทุก 1 ชั่วโมง
+	// 🌐 [เพิ่มใหม่] เปิด Web Server จำลองหลอก Render.com ให้ทำงานเบื้องหลัง
+	go func() {
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("MTS Gold Bot is Running Successfully!"))
+		})
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		fmt.Println("🌐 Web Server is running on port:", port)
+		http.ListenAndServe(":"+port, nil)
+	}()
+
+	// ⏰ แจ้งเตือนอัตโนมัติทุก 1 ชั่วโมง
 	go func() {
 		fmt.Println("⏰ เริ่มระบบแจ้งเตือนรายชั่วโมง...")
 		processAndSend(TelegramChatID)
@@ -68,7 +81,7 @@ func main() {
 		}
 	}()
 
-	// รอรับคำสั่ง
+	// 👂 รอรับคำสั่ง (พิมพ์ 'ราคา')
 	fmt.Println("👂 รอรับคำสั่ง (พิมพ์ 'ราคา')...")
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -83,14 +96,6 @@ func main() {
 			processAndSend(update.Message.Chat.ID)
 		}
 	}
-
-  // จำลอง Web Server เล็กๆ ให้ Render.com ตรวจสอบผ่าน
-  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    w.Write([]byte("Bot is Online!"))
-  })
-  port := os.Getenv("PORT")
-  if port == "" { port = "8080" }
-  http.ListenAndServe(":"+port, nil)
 }
 
 func processAndSend(chatID int64) {
@@ -178,7 +183,6 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	lines := strings.Split(htmlContent, "\n")
 	var startIndex int = -1
 
-	// หาตำแหน่งเริ่มต้นที่มีคำว่า "รับซื้อ"
 	for i, line := range lines {
 		if strings.Contains(line, "รับซื้อ") {
 			startIndex = i
@@ -207,7 +211,6 @@ func extractPrices(lines []string, startIndex int) []string {
 	candidates := []string{}
 	for j := 0; j < 25 && startIndex+j < len(lines); j++ {
 		currentLine := strings.TrimSpace(lines[startIndex+j])
-		// ลบ Tag HTML ออกเพื่อกรองหาตัวเลข
 		cleanLine := stripHTMLTags(currentLine)
 		cleanLine = strings.TrimSpace(cleanLine)
 		if cleanLine == "" {
@@ -222,7 +225,6 @@ func extractPrices(lines []string, startIndex int) []string {
 	return candidates
 }
 
-// ฟังก์ชันช่วยลบ HTML Tags
 func stripHTMLTags(s string) string {
 	inTag := false
 	var result strings.Builder
