@@ -16,9 +16,8 @@ import (
 const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
-	// เปลี่ยนมาดึงจากแหล่งข้อมูลสำรองที่เสถียรกว่า
-	ThaiGoldURL = "https://www.goldtraders.or.th/"
-	SpotGoldURL = "https://www.investing.com/currencies/xau-usd"
+	ThaiGoldURL      = "https://www.goldtraders.or.th/"
+	SpotGoldURL      = "https://api.coinbase.com/v2/prices/XAU-USD/spot"
 )
 
 var bkkZone = time.FixedZone("BKK", 7*3600)
@@ -29,9 +28,10 @@ func main() {
 		log.Panic(err)
 	}
 
+	// Health Check for Render/Railway/Heroku
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold Bot V7 (Multi-Source) is running")
+			fmt.Fprintf(w, "Gold Bot V7.1 is running")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -41,6 +41,7 @@ func main() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
+
 	for update := range updates {
 		if update.Message == nil { continue }
 		txt := strings.ToLower(update.Message.Text)
@@ -56,7 +57,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 
 	timeNow := time.Now().In(bkkZone).Format("02/01/2006 15:04")
 	
-	// คำนวณกำไรเบื้องต้นให้คุณพ่อ (ทุน 4,189.92)
+	// คำนวณกำไรเทียบทุนคุณพ่อ (4,189.92)
 	profitText := ""
 	currentSpot := parseToFloat(spotPrice)
 	if currentSpot > 0 {
@@ -68,7 +69,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 		}
 	}
 
-	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V7)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V7.1)**\n📅 %s\n\n"+
 		"🇹🇭 **ทองไทย (สมาคมฯ)**\n"+
 		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n"+
@@ -82,7 +83,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 }
 
 func fetchThaiGold() (string, string) {
-	content := getHTML(ThaiGoldURL)
+	content := getSimpleHTML(ThaiGoldURL)
 	re := regexp.MustCompile(`[0-9]{2},[0-9]{3}`)
 	matches := re.FindAllString(content, -1)
 	if len(matches) >= 2 {
@@ -92,8 +93,7 @@ func fetchThaiGold() (string, string) {
 }
 
 func fetchSpotGold() string {
-	// ดึงจาก API อิสระหรือกวาดจากเว็บที่ไม่มีการล็อค
-	content := getHTML("https://api.coinbase.com/v2/prices/XAU-USD/spot")
+	content := getSimpleHTML(SpotGoldURL)
 	re := regexp.MustCompile(`"amount":"([0-9.]+)"`)
 	match := re.FindStringSubmatch(content)
 	if len(match) > 1 {
@@ -102,12 +102,14 @@ func fetchSpotGold() string {
 	return "N/A"
 }
 
-func getHTML(url string) string {
+func getSimpleHTML(target string) string {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequest("GET", target, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return string(body)
