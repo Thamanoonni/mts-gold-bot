@@ -28,10 +28,10 @@ func main() {
 		log.Panic(err)
 	}
 
-	// Health Check for Render/Railway/Heroku
+	// ระบบป้องกันเซิร์ฟเวอร์หลับ (Health Check)
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold Bot V7.1 is running")
+			fmt.Fprintf(w, "Gold Bot V7.2 - Ready!")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -69,7 +69,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 		}
 	}
 
-	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V7.1)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V7.2)**\n📅 %s\n\n"+
 		"🇹🇭 **ทองไทย (สมาคมฯ)**\n"+
 		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n"+
@@ -84,6 +84,8 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 
 func fetchThaiGold() (string, string) {
 	content := getSimpleHTML(ThaiGoldURL)
+	if content == "" { return "N/A", "N/A" }
+	
 	re := regexp.MustCompile(`[0-9]{2},[0-9]{3}`)
 	matches := re.FindAllString(content, -1)
 	if len(matches) >= 2 {
@@ -94,6 +96,8 @@ func fetchThaiGold() (string, string) {
 
 func fetchSpotGold() string {
 	content := getSimpleHTML(SpotGoldURL)
+	if content == "" { return "N/A" }
+
 	re := regexp.MustCompile(`"amount":"([0-9.]+)"`)
 	match := re.FindStringSubmatch(content)
 	if len(match) > 1 {
@@ -103,15 +107,20 @@ func fetchSpotGold() string {
 }
 
 func getSimpleHTML(target string) string {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 	req, _ := http.NewRequest("GET", target, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	
 	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return ""
+	}
 	return string(body)
 }
 
