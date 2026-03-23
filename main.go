@@ -23,7 +23,7 @@ const (
 	HistoryFile      = "gold_history.json"
 	
 	// 🎯 ตั้งเป้าหมายราคาทองที่ต้องการให้แจ้งเตือน (รับซื้อ 96.5%)
-	TargetBuy96      = 40000.0 
+	TargetBuy96      = 65000.0 
 )
 
 var bot *tgbotapi.BotAPI
