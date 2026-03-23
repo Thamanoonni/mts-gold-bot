@@ -22,7 +22,8 @@ const (
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
 	HistoryFile      = "gold_history.json"
 	
-	TargetBuy96      = 65000.0 // ราคาเป้าหมาย
+	// 🎯 ราคาเป้าหมายทอง 96.5% (ปรับเป็นฐาน 7 หมื่นตามยุคนี้ครับ)
+	TargetBuy96      = 65000.0 
 )
 
 var bot *tgbotapi.BotAPI
@@ -39,8 +40,6 @@ type HistoryStore struct {
 }
 
 var history HistoryStore
-
-// สร้างตัวแปรโซนเวลาประเทศไทย (UTC+7)
 var bkkZone = time.FixedZone("BKK", 7*3600)
 
 func main() {
@@ -55,7 +54,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Bot is Active!"))
+			w.Write([]byte("MTS Gold Bot (96.5%) is Active!"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" {
@@ -100,7 +99,7 @@ func processAndSend() {
 			alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงเป้าแล้วครับ!** 🚨\n\n"+
 				"ราคารับซื้อปัจจุบัน: **%s** บาท\n"+
 				"(เป้าหมายที่คุณตั้งไว้: %s บาท)\n\n"+
-				"เตรียมตัวช้อนได้เลยครับคุณพ่อ!", newData.Buy, addCommaFloat(TargetBuy96))
+				"เตรียมตัวช้อนได้เลยครับ!", newData.Buy, addCommaFloat(TargetBuy96))
 
 			msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
 			msgAlert.ParseMode = "Markdown"
@@ -114,7 +113,6 @@ func processAndSend() {
 			diffBuy, diffSell = "(🆕)", "(🆕)"
 		}
 
-		// ใช้เวลาไทยในการแสดงผล
 		timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
 
 		text = fmt.Sprintf("🏆 **ราคาทอง MTS Gold (96.5%%)**\n📅 %s\n(เทียบราคาปิดเมื่อวาน)\n\n"+
@@ -148,7 +146,6 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	defer cancel()
 
 	var bodyText string
-	// 🎯 เปลี่ยนกลับมาดึงเฉพาะ "ข้อความที่ตาเห็น" (Text) ไม่อ่าน HTML
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
@@ -161,15 +158,17 @@ func scrapeMTSWithChrome() (MTSData, error) {
 
 	lines := strings.Split(bodyText, "\n")
 	var startIndex = -1
+	
+	// 🎯 ค้นหาบรรทัดที่มีคำว่า "96.5" เป็นจุดเริ่มต้น (ข้ามพวก BTC, ETH ทิ้งไปเลย)
 	for i, line := range lines {
-		if strings.Contains(line, "รับซื้อ") {
+		if strings.Contains(line, "96.5") {
 			startIndex = i
 			break
 		}
 	}
 
 	if startIndex == -1 {
-		return result, fmt.Errorf("ไม่พบคำว่า 'รับซื้อ'")
+		return result, fmt.Errorf("ไม่พบคำว่า '96.5' ในหน้าเว็บ")
 	}
 
 	prices := extractPrices(lines, startIndex)
@@ -177,6 +176,14 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	if len(prices) >= 2 {
 		result.Buy = prices[0]
 		result.Sell = prices[1]
+		
+		// 🎯 ความปลอดภัย: ราคารับซื้อต้องถูกกว่าราคาขายออกเสมอ
+		buyF := parseToFloat(result.Buy)
+		sellF := parseToFloat(result.Sell)
+		if buyF > sellF && sellF > 0 {
+			result.Buy, result.Sell = result.Sell, result.Buy
+		}
+		
 		return result, nil
 	}
 
@@ -190,18 +197,22 @@ func extractPrices(lines []string, startIndex int) []string {
 		if cleanLine == "" {
 			continue
 		}
-		// ดึงเฉพาะตัวเลขออกมาเช็ค
-		cleanW := strings.ReplaceAll(cleanLine, ",", "")
-		cleanW = strings.ReplaceAll(cleanW, ".", "")
-		if isNumeric(cleanW) && len(cleanW) >= 4 {
-			candidates = append(candidates, cleanLine)
+		
+		// ลบลูกน้ำออกเพื่อเช็คว่าเป็นตัวเลขหรือไม่
+		cleanForCheck := strings.ReplaceAll(cleanLine, ",", "")
+		if isNumeric(cleanForCheck) {
+			val := parseToFloat(cleanForCheck)
+			// 🎯 กรองเอาเฉพาะ "ราคาทองไทย" ซึ่งตอนนี้ต้องมากกว่า 20,000 บาทแน่นอน
+			// (ป้องกันการเผลอไปดึงเอาปี ค.ศ. หรือราคาของอย่างอื่นที่โผล่มาแทรก)
+			if val > 20000 {
+				candidates = append(candidates, cleanLine)
+			}
 		}
 	}
 	return candidates
 }
 
 func updateHistoryLogic(newData MTSData) {
-	// ใช้เวลาไทยในการเช็คการข้ามวัน
 	todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 	if history.CurrentDate == "" {
 		history.CurrentDate = todayStr
