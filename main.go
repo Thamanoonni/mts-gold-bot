@@ -22,8 +22,7 @@ const (
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
 	HistoryFile      = "gold_history.json"
 	
-	// 🎯 ราคาเป้าหมายทอง 96.5% (ปรับเป็นฐาน 7 หมื่นตามยุคนี้ครับ)
-	TargetBuy96      = 65000.0 
+	TargetBuy96      = 65000.0 // 🎯 ราคาเป้าหมายทอง 96.5%
 )
 
 var bot *tgbotapi.BotAPI
@@ -90,7 +89,8 @@ func processAndSend() {
 	var text string
 
 	if err != nil {
-		text = "⚠️ เกิดข้อผิดพลาดในการดึงข้อมูล: " + err.Error()
+		// 🚨 แสดง Error ที่ได้จากบอทตรงๆ ให้เราเห็นในแชทเลย
+		text = "⚠️ **บอทมีปัญหาชั่วคราวครับ:**\n\n`" + err.Error() + "`"
 	} else {
 		updateHistoryLogic(newData)
 
@@ -136,6 +136,9 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		// 🎯 1. ใส่หน้ากาก! ปลอมตัวเป็นคอมพิวเตอร์คนใช้งานปกติ (Windows 10 + Chrome)
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+		chromedp.Flag("window-size", "1920,1080"),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -149,17 +152,18 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(4*time.Second),
-		chromedp.Text(`body`, &bodyText, chromedp.ByQuery),
+		chromedp.Sleep(5*time.Second), // 🎯 2. เพิ่มเวลารอให้ระบบหลังบ้านเว็บโหลดเสร็จ
+		// 🎯 3. ดึงข้อความดิบๆ ที่มนุษย์มองเห็นบนหน้าจอจริงๆ (แม่นยำกว่าดึง HTML)
+		chromedp.Evaluate(`document.body.innerText`, &bodyText),
 	)
+	
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("เชื่อมต่อเว็บไม่ได้: %v", err)
 	}
 
 	lines := strings.Split(bodyText, "\n")
 	var startIndex = -1
 	
-	// 🎯 ค้นหาบรรทัดที่มีคำว่า "96.5" เป็นจุดเริ่มต้น (ข้ามพวก BTC, ETH ทิ้งไปเลย)
 	for i, line := range lines {
 		if strings.Contains(line, "96.5") {
 			startIndex = i
@@ -168,7 +172,12 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	}
 
 	if startIndex == -1 {
-		return result, fmt.Errorf("ไม่พบคำว่า '96.5' ในหน้าเว็บ")
+		// 🚨 ระบบส่งภาพจำลอง: ถ้าหาไม่เจอ ให้ส่งข้อความที่บอทเห็นมาให้เราวิเคราะห์
+		debugMsg := bodyText
+		if len(debugMsg) > 300 {
+			debugMsg = debugMsg[:300] + "..." // ตัดให้สั้นเดี๋ยวรกแชท
+		}
+		return result, fmt.Errorf("ไม่พบคำว่า '96.5' บนเว็บตอนนี้\n\n🔍 สิ่งที่บอทเห็น:\n%s", debugMsg)
 	}
 
 	prices := extractPrices(lines, startIndex)
@@ -177,7 +186,6 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		result.Buy = prices[0]
 		result.Sell = prices[1]
 		
-		// 🎯 ความปลอดภัย: ราคารับซื้อต้องถูกกว่าราคาขายออกเสมอ
 		buyF := parseToFloat(result.Buy)
 		sellF := parseToFloat(result.Sell)
 		if buyF > sellF && sellF > 0 {
@@ -187,7 +195,7 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		return result, nil
 	}
 
-	return result, fmt.Errorf("หาตัวเลขไม่พบ พบแค่ %d ค่า", len(prices))
+	return result, fmt.Errorf("หาตัวเลขราคาไม่พบ (ได้มา %d ค่า)", len(prices))
 }
 
 func extractPrices(lines []string, startIndex int) []string {
@@ -198,12 +206,10 @@ func extractPrices(lines []string, startIndex int) []string {
 			continue
 		}
 		
-		// ลบลูกน้ำออกเพื่อเช็คว่าเป็นตัวเลขหรือไม่
 		cleanForCheck := strings.ReplaceAll(cleanLine, ",", "")
+		cleanForCheck = strings.ReplaceAll(cleanForCheck, ".", "")
 		if isNumeric(cleanForCheck) {
 			val := parseToFloat(cleanForCheck)
-			// 🎯 กรองเอาเฉพาะ "ราคาทองไทย" ซึ่งตอนนี้ต้องมากกว่า 20,000 บาทแน่นอน
-			// (ป้องกันการเผลอไปดึงเอาปี ค.ศ. หรือราคาของอย่างอื่นที่โผล่มาแทรก)
 			if val > 20000 {
 				candidates = append(candidates, cleanLine)
 			}
