@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,12 +16,11 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// --- Config ---
 const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
-	HistoryFile      = "gold_history_v4.json"
+	HistoryFile      = "gold_history_v5.json"
 )
 
 var TargetPrices96 = []float64{67500.0, 65000.0}
@@ -51,14 +51,12 @@ func main() {
 	var err error
 	bot, err = tgbotapi.NewBotAPI(TelegramBotToken)
 	if err != nil {
-		log.Panic("❌ เชื่อมต่อ Telegram ไม่ได้: ", err)
+		log.Panic(err)
 	}
-
-	fmt.Println("🤖 Bot Online:", bot.Self.UserName)
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Dual-Bot (V4.1 Fixed) is Active!"))
+			w.Write([]byte("MTS Gold Bot V5 is running"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -86,59 +84,33 @@ func main() {
 }
 
 func processAndSend() {
-	newData, err := scrapeMTSWithPrecision()
-	var text string
-
+	newData, err := scrapeMTS()
 	if err != nil {
-		text = "⚠️ บอทขัดข้อง: `" + err.Error() + "`"
-	} else {
-		updateHistoryLogic(newData)
-		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
-
-		currentSpotAsk := parseToFloat(newData.SpotAsk)
-		if currentSpotAsk > 0 {
-			for _, target := range TargetSpotPrices {
-				if alertedSpotToday[target] != todayStr {
-					if target < 4189 && currentSpotAsk <= target {
-						sendAlert(fmt.Sprintf("🚨 **ALERT (Dime!): ทองโลกย่อถึงไม้ช้อน!**\n\nราคาปัจจุบัน: **%s** USD\nเป้าหมาย: %s USD", newData.SpotAsk, addCommaFloat(target)))
-						alertedSpotToday[target] = todayStr
-					}
-					if target > 4189 && currentSpotAsk >= target {
-						sendAlert(fmt.Sprintf("🚀 **ALERT (Dime!): ทองโลกพุ่งทะลุแนวต้าน!**\n\nราคาปัจจุบัน: **%s** USD\nเป้าหมาย: %s USD\nพิจารณาเก็บเพิ่มไม้ 2 ครับ!", newData.SpotAsk, addCommaFloat(target)))
-						alertedSpotToday[target] = todayStr
-					}
-				}
-			}
-		}
-
-		timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
-		text = fmt.Sprintf("🏆 **รายงานราคาทองคำ (2 ระบบ)**\n📅 %s\n\n"+
-			"🇹🇭 **ทองไทย 96.5%%**\n"+
-			"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
-			"🌎 **Gold Spot (Dime!)**\n"+
-			"🟢 Bid: %s\n🔴 Ask: %s",
-			timeNowTH, newData.Buy96, newData.Sell96, newData.SpotBid, newData.SpotAsk,
-		)
+		bot.Send(tgbotapi.NewMessage(TelegramChatID, "⚠️ Error: "+err.Error()))
+		return
 	}
+	updateHistoryLogic(newData)
+	
+	timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
+	text := fmt.Sprintf("🏆 **รายงานราคาทองคำ (2 ระบบ)**\n📅 %s\n\n"+
+		"🇹🇭 **ทองไทย 96.5%%**\n"+
+		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
+		"🌎 **Gold Spot (Dime!)**\n"+
+		"🟢 Bid: %s\n🔴 Ask: %s",
+		timeNowTH, newData.Buy96, newData.Sell96, newData.SpotBid, newData.SpotAsk,
+	)
 
 	msg := tgbotapi.NewMessage(TelegramChatID, text)
 	msg.ParseMode = "Markdown"
 	bot.Send(msg)
 }
 
-func sendAlert(msgText string) {
-	msg := tgbotapi.NewMessage(TelegramChatID, msgText)
-	msg.ParseMode = "Markdown"
-	bot.Send(msg)
-}
-
-func scrapeMTSWithPrecision() (MTSData, error) {
+func scrapeMTS() (MTSData, error) {
 	var result MTSData
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -148,47 +120,59 @@ func scrapeMTSWithPrecision() (MTSData, error) {
 	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	var buy96, sell96, spotBid, spotAsk string
-
+	var bodyText string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(12*time.Second), 
-		chromedp.Text(`.price-965-buy`, &buy96, chromedp.ByQuery),
-		chromedp.Text(`.price-965-sell`, &sell96, chromedp.ByQuery),
-		chromedp.Text(`.price-spot-buy`, &spotBid, chromedp.ByQuery),
-		chromedp.Text(`.price-spot-sell`, &spotAsk, chromedp.ByQuery),
+		chromedp.Sleep(10*time.Second),
+		chromedp.Evaluate(`document.body.innerText`, &bodyText),
 	)
-	
-	// ถึงแม้จะ error เราก็จะพยายามแสดงค่าเท่าที่ดึงได้ครับ
-	if err != nil {
-		fmt.Println("Warning: Scraping error:", err)
+	if err != nil { return result, err }
+
+	re := regexp.MustCompile(`[0-9,.]+`)
+	tokens := strings.Fields(bodyText)
+
+	var c96 []string
+	var cSpot []string
+
+	for i, t := range tokens {
+		// หา 96.5%
+		if strings.Contains(t, "96.5") {
+			for j := i + 1; j < i+10 && j < len(tokens); j++ {
+				num := re.FindString(tokens[j])
+				val := parseToFloat(num)
+				if val > 30000 && val < 90000 {
+					c96 = append(c96, formatWithComma(val))
+					if len(c96) == 2 { break }
+				}
+			}
+		}
+		// หา Spot (อิงคำว่า Spot หรือสัญลักษณ์ $)
+		if strings.Contains(strings.ToLower(t), "spot") || strings.Contains(t, "$") {
+			for j := i + 1; j < i+10 && j < len(tokens); j++ {
+				num := re.FindString(tokens[j])
+				val := parseToFloat(num)
+				if val > 3000 && val < 6000 {
+					cSpot = append(cSpot, fmt.Sprintf("%.2f", val))
+					if len(cSpot) == 2 { break }
+				}
+			}
+		}
 	}
 
-	result.Buy96 = cleanNumber(buy96)
-	result.Sell96 = cleanNumber(sell96)
-	result.SpotBid = cleanNumber(spotBid)
-	result.SpotAsk = cleanNumber(spotAsk)
-
-	if result.Buy96 == "" { result.Buy96, result.Sell96 = "N/A", "N/A" }
-	if result.SpotBid == "" { result.SpotBid, result.SpotAsk = "N/A", "N/A" }
+	if len(c96) >= 2 { result.Buy96, result.Sell96 = sortStr(c96[0], c96[1]) } else { result.Buy96, result.Sell96 = "N/A", "N/A" }
+	if len(cSpot) >= 2 { result.SpotBid, result.SpotAsk = sortStr(cSpot[0], cSpot[1]) } else { result.SpotBid, result.SpotAsk = "N/A", "N/A" }
 
 	return result, nil
 }
 
-func cleanNumber(s string) string {
-	res := ""
-	for _, r := range s {
-		if (r >= '0' && r <= '9') || r == '.' { res += string(r) }
-	}
-	if strings.Contains(s, ",") && !strings.Contains(res, ".") {
-		return addCommaStr(res) 
-	}
-	return res
+func sortStr(a, b string) (string, string) {
+	if parseToFloat(a) > parseToFloat(b) { return b, a }
+	return a, b
 }
 
-func addCommaStr(s string) string {
-	if len(s) <= 3 { return s }
+func formatWithComma(n float64) string {
+	s := strconv.FormatFloat(n, 'f', 0, 64)
 	res := ""
 	for i, j := len(s)-1, 0; i >= 0; i-- {
 		res = string(s[i]) + res
@@ -196,6 +180,12 @@ func addCommaStr(s string) string {
 		if j == 3 && i > 0 { res = "," + res; j = 0 }
 	}
 	return res
+}
+
+func parseToFloat(s string) float64 {
+	clean := strings.ReplaceAll(s, ",", "")
+	val, _ := strconv.ParseFloat(clean, 64)
+	return val
 }
 
 func updateHistoryLogic(newData MTSData) {
@@ -218,23 +208,4 @@ func loadHistory() HistoryStore {
 func saveHistory(h HistoryStore) {
 	data, _ := json.MarshalIndent(h, "", " ")
 	os.WriteFile(HistoryFile, data, 0644)
-}
-
-func parseToFloat(s string) float64 {
-	clean := strings.ReplaceAll(s, ",", "")
-	val, _ := strconv.ParseFloat(clean, 64)
-	return val
-}
-
-func addCommaFloat(n float64) string {
-	parts := strings.Split(fmt.Sprintf("%.2f", n), ".")
-	intPart, decPart := parts[0], parts[1]
-	nStr := ""
-	for i, j := len(intPart)-1, 0; i >= 0; i-- {
-		nStr = string(intPart[i]) + nStr
-		j++
-		if j == 3 && i > 0 { nStr = "," + nStr; j = 0 }
-	}
-	if decPart == "00" { return nStr }
-	return nStr + "." + decPart
 }
