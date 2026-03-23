@@ -20,18 +20,25 @@ const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
-	HistoryFile      = "gold_history.json"
+	HistoryFile      = "gold_history_v2.json" // เปลี่ยนชื่อไฟล์เล็กน้อยเพื่อรับระบบ 2 พอร์ต
 )
 
-// 🎯 ตั้งราคาเป้าหมายหลายระดับ (เช็คกับ "ราคาขายออก")
-var TargetPrices = []float64{67500.0, 65000.0}
+// 🎯 ตั้งราคาเป้าหมาย ทองไทย 96.5% (เล็งราคาขายออก)
+var TargetPrices96 = []float64{67500.0, 65000.0}
 
-var alertedToday = make(map[float64]string)
+// 🎯 ตั้งราคาเป้าหมาย ทองโลก Spot Gold USD/oz (เล็งราคา Ask ที่เราจะซื้อ)
+var TargetSpotPrices = []float64{4100.0, 4050.0, 4000.0}
+
+var alerted96Today = make(map[float64]string)
+var alertedSpotToday = make(map[float64]string)
 var bot *tgbotapi.BotAPI
 
+// โครงสร้างข้อมูล 2 ระบบ
 type MTSData struct {
-	Buy  string `json:"buy"`
-	Sell string `json:"sell"`
+	Buy96   string `json:"buy_96"`
+	Sell96  string `json:"sell_96"`
+	SpotBid string `json:"spot_bid"`
+	SpotAsk string `json:"spot_ask"`
 }
 
 type HistoryStore struct {
@@ -55,7 +62,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Bot (96.5%) is Active!"))
+			w.Write([]byte("MTS Gold Dual-Bot is Active!"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" {
@@ -91,49 +98,73 @@ func processAndSend() {
 	var text string
 
 	if err != nil {
-		text = "⚠️ เกิดข้อผิดพลาดในการดึงข้อมูล: `" + err.Error() + "`"
+		text = "⚠️ เกิดข้อผิดพลาดในการดึงข้อมูล:\n`" + err.Error() + "`"
 	} else {
 		updateHistoryLogic(newData)
-
-		// 🎯 แก้ไข: ดึงตัวเลข "ขายออก (Sell)" มาตรวจสอบแทนรับซื้อ
-		currentSell := parseToFloat(newData.Sell)
 		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 
-		if currentSell > 0 {
-			for _, target := range TargetPrices {
-				// 🎯 เช็คว่าราคาขายออก ร่วงลงมาถึงเป้าหมายหรือยัง
-				if currentSell <= target {
-					if alertedToday[target] != todayStr {
-						alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงไม้เป้าหมายแล้ว!** 🚨\n\n"+
-							"ราคาขายออกปัจจุบัน: **%s** บาท\n"+
-							"(เป้าหมายที่คุณตั้งไว้: %s บาท)\n\n"+
-							"เตรียมพิจารณาเข้าซื้อได้เลยครับ!", newData.Sell, addCommaFloat(target))
-
+		// 🚨 1. เช็คเป้าหมาย: ทองไทย 96.5%
+		currentSell96 := parseToFloat(newData.Sell96)
+		if currentSell96 > 0 {
+			for _, target := range TargetPrices96 {
+				if currentSell96 <= target {
+					if alerted96Today[target] != todayStr {
+						alertText := fmt.Sprintf("🚨 **ALERT (พอร์ตเกษียณ): ทองไทยถึงเป้าแล้ว!** 🚨\n\n"+
+							"ราคาขายออก: **%s** บาท\n"+
+							"(เป้าหมาย: %s บาท)", newData.Sell96, addCommaFloat(target))
 						msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
 						msgAlert.ParseMode = "Markdown"
 						bot.Send(msgAlert)
-
-						alertedToday[target] = todayStr
+						alerted96Today[target] = todayStr
 					}
 				}
 			}
 		}
 
-		diffBuy := getDiffText(newData.Buy, history.YesterdayData.Buy)
-		diffSell := getDiffText(newData.Sell, history.YesterdayData.Sell)
+		// 🚨 2. เช็คเป้าหมาย: ทองโลก Spot Gold (Dime!)
+		currentSpotAsk := parseToFloat(newData.SpotAsk)
+		if currentSpotAsk > 0 {
+			for _, target := range TargetSpotPrices {
+				if currentSpotAsk <= target {
+					if alertedSpotToday[target] != todayStr {
+						alertText := fmt.Sprintf("🚨 **ALERT (พอร์ต Dime!): ทองโลกย่อถึงไม้ดักช้อนแล้ว!** 🚨\n\n"+
+							"ราคา Spot (Ask): **%s** USD/oz\n"+
+							"(เป้าหมาย: %s USD/oz)\n\n"+
+							"เตรียมกระสุน 100,000 เข้าช้อนไม้ 2 ได้เลยครับคุณพ่อ!", newData.SpotAsk, addCommaFloat(target))
+						msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
+						msgAlert.ParseMode = "Markdown"
+						bot.Send(msgAlert)
+						alertedSpotToday[target] = todayStr
+					}
+				}
+			}
+		}
 
-		if history.YesterdayData.Buy == "" {
-			diffBuy, diffSell = "(🆕)", "(🆕)"
+		// 📝 เตรียมข้อความส่วนต่างราคา (เทียบเมื่อวาน)
+		diffBuy96 := getDiffText(newData.Buy96, history.YesterdayData.Buy96)
+		diffSell96 := getDiffText(newData.Sell96, history.YesterdayData.Sell96)
+		diffSpotBid := getDiffText(newData.SpotBid, history.YesterdayData.SpotBid)
+		diffSpotAsk := getDiffText(newData.SpotAsk, history.YesterdayData.SpotAsk)
+
+		if history.YesterdayData.Buy96 == "" {
+			diffBuy96, diffSell96, diffSpotBid, diffSpotAsk = "(🆕)", "(🆕)", "(🆕)", "(🆕)"
 		}
 
 		timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
 
-		text = fmt.Sprintf("🏆 **ราคาทอง MTS Gold (96.5%%)**\n📅 %s\n(เทียบราคาปิดเมื่อวาน)\n\n"+
+		// 🏆 สรุปรายงาน 2 ระบบ
+		text = fmt.Sprintf("🏆 **รายงานราคาทองคำ (2 ระบบ)**\n📅 %s\n\n"+
+			"🇹🇭 **ทองคำแท่ง 96.5%%**\n"+
 			"🟢 รับซื้อ: %s %s\n"+
-			"🔴 ขายออก: %s %s",
+			"🔴 ขายออก: %s %s\n\n"+
+			"🌎 **Gold Spot (Dime!)**\n"+
+			"🟢 Bid: %s %s\n"+
+			"🔴 Ask: %s %s",
 			timeNowTH,
-			newData.Buy, diffBuy,
-			newData.Sell, diffSell,
+			newData.Buy96, diffBuy96,
+			newData.Sell96, diffSell96,
+			newData.SpotBid, diffSpotBid,
+			newData.SpotAsk, diffSpotAsk,
 		)
 	}
 
@@ -172,48 +203,73 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	}
 
 	tokens := strings.Fields(bodyText)
-	var startIndex = -1
 	
+	// --- 1. ค้นหาทองไทย 96.5% ---
+	var idx96 = -1
 	for i, token := range tokens {
 		if strings.Contains(token, "96.5") {
-			startIndex = i
+			idx96 = i
 			break
 		}
 	}
 
-	if startIndex == -1 {
-		return result, fmt.Errorf("ไม่พบคำว่า '96.5' บนเว็บ")
+	if idx96 != -1 {
+		var cands96 []string
+		for j := idx96; j < len(tokens) && j < idx96+30; j++ {
+			cleanToken := strings.ReplaceAll(tokens[j], ",", "")
+			if isNumeric(cleanToken) {
+				val := parseToFloat(cleanToken)
+				if val > 20000 && val < 100000 {
+					cands96 = append(cands96, tokens[j])
+					if len(cands96) == 2 {
+						break 
+					}
+				}
+			}
+		}
+		if len(cands96) >= 2 {
+			result.Buy96 = cands96[0]
+			result.Sell96 = cands96[1]
+			// จัดเรียงให้น้อยอยู่หน้า (รับซื้อต้องถูกกว่าขายออก)
+			if parseToFloat(result.Buy96) > parseToFloat(result.Sell96) {
+				result.Buy96, result.Sell96 = result.Sell96, result.Buy96
+			}
+		}
 	}
 
-	var candidates []string
-	for j := startIndex; j < len(tokens) && j < startIndex+30; j++ {
-		cleanToken := strings.ReplaceAll(tokens[j], ",", "")
-		cleanToken = strings.ReplaceAll(cleanToken, ".", "")
-		
+	// --- 2. ค้นหา Gold Spot (USD) ---
+	// หลักการ: ดึงตัวเลขที่มีค่าระหว่าง 3,000 - 6,000 (เพื่อหลีกเลี่ยงปี ค.ศ. หรือราคาทองไทย)
+	var candsSpot []string
+	for _, token := range tokens {
+		cleanToken := strings.ReplaceAll(token, ",", "")
 		if isNumeric(cleanToken) {
 			val := parseToFloat(cleanToken)
-			if val > 20000 && val < 100000 {
-				candidates = append(candidates, tokens[j])
-				if len(candidates) == 2 {
-					break 
+			if val > 3000.0 && val < 6000.0 { // ช่วงราคา Spot ปัจจุบัน
+				candsSpot = append(candsSpot, token)
+				if len(candsSpot) == 2 {
+					break
 				}
 			}
 		}
 	}
-	
-	if len(candidates) >= 2 {
-		result.Buy = candidates[0]
-		result.Sell = candidates[1]
-		
-		buyF := parseToFloat(result.Buy)
-		sellF := parseToFloat(result.Sell)
-		if buyF > sellF && sellF > 0 {
-			result.Buy, result.Sell = result.Sell, result.Buy
+
+	if len(candsSpot) >= 2 {
+		result.SpotBid = candsSpot[0]
+		result.SpotAsk = candsSpot[1]
+		if parseToFloat(result.SpotBid) > parseToFloat(result.SpotAsk) {
+			result.SpotBid, result.SpotAsk = result.SpotAsk, result.SpotBid
 		}
-		return result, nil
 	}
 
-	return result, fmt.Errorf("หาตัวเลขเจอ %d ตัว", len(candidates))
+	if result.Buy96 == "" && result.SpotBid == "" {
+		return result, fmt.Errorf("หาตัวเลขไม่เจอทั้ง 2 ระบบเลยครับ")
+	}
+
+	// ถ้าเจออย่างใดอย่างหนึ่งให้ถือว่าผ่าน (แสดงเป็น N/A ได้ถ้าระบบใดรวน)
+	if result.Buy96 == "" { result.Buy96 = "N/A"; result.Sell96 = "N/A" }
+	if result.SpotBid == "" { result.SpotBid = "N/A"; result.SpotAsk = "N/A" }
+
+	return result, nil
 }
 
 func updateHistoryLogic(newData MTSData) {
@@ -248,7 +304,7 @@ func saveHistory(h HistoryStore) {
 }
 
 func getDiffText(currentStr, lastStr string) string {
-	if lastStr == "" || currentStr == "-" {
+	if lastStr == "" || currentStr == "-" || currentStr == "N/A" || lastStr == "N/A" {
 		return ""
 	}
 	curr := parseToFloat(currentStr)
@@ -271,25 +327,33 @@ func parseToFloat(s string) float64 {
 }
 
 func addCommaFloat(n float64) string {
-	in := int(n)
-	s := strconv.Itoa(in)
-	if in < 0 {
-		s = s[1:]
+	// รองรับจุดทศนิยมสำหรับ Spot Gold
+	parts := strings.Split(fmt.Sprintf("%.2f", n), ".")
+	intPart := parts[0]
+	decPart := parts[1]
+
+	sign := ""
+	if strings.HasPrefix(intPart, "-") {
+		sign = "-"
+		intPart = intPart[1:]
 	}
+
 	nStr := ""
 	count := 0
-	for i := len(s) - 1; i >= 0; i-- {
-		nStr = string(s[i]) + nStr
+	for i := len(intPart) - 1; i >= 0; i-- {
+		nStr = string(intPart[i]) + nStr
 		count++
 		if count == 3 && i > 0 {
 			nStr = "," + nStr
 			count = 0
 		}
 	}
-	if int(n) < 0 {
-		nStr = "-" + nStr
+	
+	// ถ้าเป็นทศนิยม .00 ให้ตัดทิ้งเพื่อความสวยงาม (สำหรับทองไทย)
+	if decPart == "00" {
+		return sign + nStr
 	}
-	return nStr
+	return sign + nStr + "." + decPart
 }
 
 func isNumeric(s string) bool {
