@@ -57,7 +57,6 @@ func main() {
 	bot.Debug = false
 	fmt.Printf("🤖 Bot Online: %s\n", bot.Self.UserName)
 
-	// 🌐 [เพิ่มใหม่] เปิด Web Server จำลองหลอก Render.com ให้ทำงานเบื้องหลัง
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("MTS Gold Bot is Running Successfully!"))
@@ -66,23 +65,17 @@ func main() {
 		if port == "" {
 			port = "8080"
 		}
-		fmt.Println("🌐 Web Server is running on port:", port)
 		http.ListenAndServe(":"+port, nil)
 	}()
 
-	// ⏰ แจ้งเตือนอัตโนมัติทุก 1 ชั่วโมง
 	go func() {
-		fmt.Println("⏰ เริ่มระบบแจ้งเตือนรายชั่วโมง...")
 		processAndSend(TelegramChatID)
 		ticker := time.NewTicker(1 * time.Hour)
 		for range ticker.C {
-			fmt.Println("⏰ ครบ 1 ชั่วโมง - กำลังดึงข้อมูล...")
 			processAndSend(TelegramChatID)
 		}
 	}()
 
-	// 👂 รอรับคำสั่ง (พิมพ์ 'ราคา')
-	fmt.Println("👂 รอรับคำสั่ง (พิมพ์ 'ราคา')...")
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
@@ -108,13 +101,12 @@ func processAndSend(chatID int64) {
 	} else {
 		updateHistoryLogic(newData)
 
-		// 🎯 ระบบเช็คราคาเป้าหมาย และส่งแจ้งเตือนพิเศษ!
 		currentBuy96 := parseToFloat(newData.Gold96.Buy)
 		if currentBuy96 > 0 && currentBuy96 <= TargetBuy96 {
 			alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงเป้าแล้วครับ!** 🚨\n\n"+
 				"ราคารับซื้อปัจจุบัน: **%s** บาท\n"+
 				"(เป้าหมายที่คุณตั้งไว้: %s บาท)\n\n"+
-				"เข้าแอปเตรียมช้อนได้เลยครับ!", newData.Gold96.Buy, addComma(TargetBuy96))
+				"เตรียมตัวช้อนได้เลยครับคุณพ่อ!", newData.Gold96.Buy, addComma(TargetBuy96))
 			
 			msgAlert := tgbotapi.NewMessage(chatID, alertText)
 			msgAlert.ParseMode = "Markdown"
@@ -156,6 +148,8 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		// 🎯 1. หลอกเว็บว่าเราใช้หน้าจอคอมพิวเตอร์ขนาดใหญ่ ข้อมูลจะได้ไม่โดนซ่อน
+		chromedp.Flag("window-size", "1920,1080"), 
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -164,14 +158,14 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	var htmlContent string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(2*time.Second),
+		chromedp.Sleep(3*time.Second),
 		chromedp.OuterHTML("html", &htmlContent),
 	)
 
@@ -202,6 +196,13 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		result.Gold99.Buy = prices[2]
 		result.Gold99.Sell = prices[3]
 		return result, nil
+	} else if len(prices) >= 2 {
+		// 🎯 2. แผนสำรอง: ถ้าเว็บซ่อน 99.99% จริงๆ ให้ใช้แค่ 96.5% ก็พอ ระบบจะได้ไม่พัง
+		result.Gold96.Buy = prices[0]
+		result.Gold96.Sell = prices[1]
+		result.Gold99.Buy = "-"
+		result.Gold99.Sell = "-"
+		return result, nil
 	}
 
 	return result, fmt.Errorf("ดึงราคามาไม่ครบ พบแค่ %d ค่า", len(prices))
@@ -209,7 +210,8 @@ func scrapeMTSWithChrome() (MTSData, error) {
 
 func extractPrices(lines []string, startIndex int) []string {
 	candidates := []string{}
-	for j := 0; j < 25 && startIndex+j < len(lines); j++ {
+	// ขยายระยะค้นหาให้ลึกขึ้นเผื่อเว็บจัดรูปแบบใหม่
+	for j := 0; j < 60 && startIndex+j < len(lines); j++ {
 		currentLine := strings.TrimSpace(lines[startIndex+j])
 		cleanLine := stripHTMLTags(currentLine)
 		cleanLine = strings.TrimSpace(cleanLine)
@@ -274,7 +276,7 @@ func saveHistory(h HistoryStore) {
 }
 
 func getDiffText(currentStr, lastStr string) string {
-	if lastStr == "" { return "" }
+	if lastStr == "" || currentStr == "-" { return "" }
 	curr := parseToFloat(currentStr)
 	last := parseToFloat(lastStr)
 	diff := curr - last
@@ -296,21 +298,3 @@ func addCommaFloat(n float64) string {
 	if in < 0 { s = s[1:] }
 	nStr := ""
 	count := 0
-	for i := len(s) - 1; i >= 0; i-- {
-		nStr = string(s[i]) + nStr
-		count++
-		if count == 3 && i > 0 {
-			nStr = "," + nStr
-			count = 0
-		}
-	}
-	if int(n) < 0 { nStr = "-" + nStr }
-	return nStr
-}
-
-func addComma(n float64) string { return addCommaFloat(n) }
-
-func isNumeric(s string) bool {
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
-}
