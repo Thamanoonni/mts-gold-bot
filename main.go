@@ -23,12 +23,10 @@ const (
 	HistoryFile      = "gold_history.json"
 )
 
-// 🎯 ตั้งราคาเป้าหมายหลายระดับ (เพิ่ม/ลด ตัวเลขในปีกกาได้เลยครับ คั่นด้วยลูกน้ำ)
+// 🎯 ตั้งราคาเป้าหมายหลายระดับ (เช็คกับ "ราคาขายออก")
 var TargetPrices = []float64{67500.0, 65000.0}
 
-// ระบบจดจำว่าวันนี้เคยเตือนราคานี้ไปหรือยัง (กันบอทสแปมข้อความ)
 var alertedToday = make(map[float64]string)
-
 var bot *tgbotapi.BotAPI
 
 type MTSData struct {
@@ -97,25 +95,24 @@ func processAndSend() {
 	} else {
 		updateHistoryLogic(newData)
 
-		currentBuy := parseToFloat(newData.Buy)
+		// 🎯 แก้ไข: ดึงตัวเลข "ขายออก (Sell)" มาตรวจสอบแทนรับซื้อ
+		currentSell := parseToFloat(newData.Sell)
 		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 
-		if currentBuy > 0 {
-			// 🎯 วนลูปเช็คราคาเป้าหมายทีละไม้
+		if currentSell > 0 {
 			for _, target := range TargetPrices {
-				if currentBuy <= target {
-					// เช็คว่าวันนี้เคยเตือนไม้ราคานี้ไปหรือยัง
+				// 🎯 เช็คว่าราคาขายออก ร่วงลงมาถึงเป้าหมายหรือยัง
+				if currentSell <= target {
 					if alertedToday[target] != todayStr {
 						alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงไม้เป้าหมายแล้ว!** 🚨\n\n"+
-							"ราคารับซื้อปัจจุบัน: **%s** บาท\n"+
-							"(เป้าหมายที่ตั้งไว้: %s บาท)\n\n"+
-							"เตรียมพิจารณาเข้าซื้อได้เลยครับคุณพ่อ!", newData.Buy, addCommaFloat(target))
+							"ราคาขายออกปัจจุบัน: **%s** บาท\n"+
+							"(เป้าหมายที่คุณตั้งไว้: %s บาท)\n\n"+
+							"เตรียมพิจารณาเข้าซื้อได้เลยครับ!", newData.Sell, addCommaFloat(target))
 
 						msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
 						msgAlert.ParseMode = "Markdown"
 						bot.Send(msgAlert)
 
-						// บันทึกไว้ว่าวันนี้เตือนราคานี้ไปแล้ว
 						alertedToday[target] = todayStr
 					}
 				}
