@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,13 +20,10 @@ const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
-	HistoryFile      = "gold_history_v3.json"
+	HistoryFile      = "gold_history_v4.json"
 )
 
-// 🎯 ตั้งราคาเป้าหมายทองไทย 96.5%
 var TargetPrices96 = []float64{67500.0, 65000.0}
-
-// 🎯 ตั้งเป้าหมาย Gold Spot (ทั้งขาช้อน 4100-4000 และ ขาตาม 4250-4300)
 var TargetSpotPrices = []float64{4000.0, 4050.0, 4100.0, 4250.0, 4300.0}
 
 var alerted96Today = make(map[float64]string)
@@ -62,7 +58,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Dual-Bot (V3) is Running!"))
+			w.Write([]byte("MTS Gold Dual-Bot (V4 Precision) is Active!"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -90,26 +86,24 @@ func main() {
 }
 
 func processAndSend() {
-	newData, err := scrapeMTSWithChrome()
+	newData, err := scrapeMTSWithPrecision()
 	var text string
 
 	if err != nil {
-		text = "⚠️ บอทหาข้อมูลไม่เจอ: `" + err.Error() + "`"
+		text = "⚠️ บอทขัดข้อง: `" + err.Error() + "`"
 	} else {
 		updateHistoryLogic(newData)
 		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 
-		// 🚨 เช็คเป้าหมาย Spot Gold (Dime!)
+		// 🚨 ระบบแจ้งเตือน (เหมือนเดิม)
 		currentSpotAsk := parseToFloat(newData.SpotAsk)
 		if currentSpotAsk > 0 {
 			for _, target := range TargetSpotPrices {
 				if alertedSpotToday[target] != todayStr {
-					// กรณีราคาลง (ช้อน)
 					if target < 4189 && currentSpotAsk <= target {
 						sendAlert(fmt.Sprintf("🚨 **ALERT (Dime!): ทองโลกย่อถึงไม้ช้อน!**\n\nราคาปัจจุบัน: **%s** USD\nเป้าหมาย: %s USD", newData.SpotAsk, addCommaFloat(target)))
 						alertedSpotToday[target] = todayStr
 					}
-					// กรณีราคาขึ้น (ตาม)
 					if target > 4189 && currentSpotAsk >= target {
 						sendAlert(fmt.Sprintf("🚀 **ALERT (Dime!): ทองโลกพุ่งทะลุแนวต้าน!**\n\nราคาปัจจุบัน: **%s** USD\nเป้าหมาย: %s USD\nพิจารณาเก็บเพิ่มไม้ 2 ครับ!", newData.SpotAsk, addCommaFloat(target)))
 						alertedSpotToday[target] = todayStr
@@ -139,12 +133,12 @@ func sendAlert(msgText string) {
 	bot.Send(msg)
 }
 
-func scrapeMTSWithChrome() (MTSData, error) {
+func scrapeMTSWithPrecision() (MTSData, error) {
 	var result MTSData
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 	)
 
@@ -155,53 +149,41 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	var bodyText string
+	var buy96, sell96, spotBid, spotAsk string
+
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
-		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(8*time.Second), // รอให้นานขึ้นเผื่อ Widget ดีเลย์
-		chromedp.Evaluate(`document.body.innerText`, &bodyText),
+		chromedp.WaitVisible(`#table-price-all`, chromedp.ByQuery), // รอตารางราคาโหลด
+		chromedp.Sleep(10*time.Second), // ให้เวลา Widget คำนวณราคานิดนึงครับ
+		// 🎯 จิ้มเอาตัวเลขจากกล่องราคาโดยตรง (CSS Selectors)
+		chromedp.Text(`.price-965-buy`, &buy96, chromedp.ByQuery),
+		chromedp.Text(`.price-965-sell`, &sell96, chromedp.ByQuery),
+		chromedp.Text(`.price-spot-buy`, &spotBid, chromedp.ByQuery),
+		chromedp.Text(`.price-spot-sell`, &spotAsk, chromedp.ByQuery),
 	)
-	if err != nil { return result, err }
 
-	tokens := strings.Fields(bodyText)
-	re := regexp.MustCompile(`[0-9,.]+`)
-
-	// --- หา Spot Gold (เจาะจงหาคำว่า Spot หรือ $ ในบริเวณราคา) ---
-	var cSpot []string
-	for i, t := range tokens {
-		if strings.Contains(strings.ToLower(t), "spot") || strings.Contains(t, "$") {
-			// กวาดหาตัวเลขในรัศมี 10 คำรอบๆ
-			for j := i; j < i+10 && j < len(tokens); j++ {
-				numStr := re.FindString(tokens[j])
-				val := parseToFloat(numStr)
-				if val > 3000 && val < 6000 {
-					cSpot = append(cSpot, numStr)
-					if len(cSpot) == 2 { break }
+	// ถ้าวิธีแรกไม่ได้ผล (Class name เปลี่ยน) ให้ใช้แผนสำรองกวาดตามหาเหมือนเดิมแต่เข้มข้นขึ้น
+	if spotAsk == "" || spotAsk == "-" {
+		var bodyText string
+		chromedp.Run(ctx, chromedp.Evaluate(`document.body.innerText`, &bodyText))
+		tokens := strings.Fields(bodyText)
+		for i, t := range tokens {
+			if strings.Contains(t, "$") || strings.Contains(strings.ToLower(t), "spot") {
+				for j := i; j < i+10 && j < len(tokens); j++ {
+					clean := cleanNumber(tokens[j])
+					v, _ := strconv.ParseFloat(clean, 64)
+					if v > 3000 && v < 6000 {
+						if spotBid == "" { spotBid = clean } else if spotAsk == "" { spotAsk = clean; break }
+					}
 				}
 			}
 		}
-		if len(cSpot) == 2 { break }
 	}
 
-	// --- หา 96.5 ---
-	var c96 []string
-	for i, t := range tokens {
-		if strings.Contains(t, "96.5") {
-			for j := i; j < i+15 && j < len(tokens); j++ {
-				numStr := re.FindString(tokens[j])
-				val := parseToFloat(numStr)
-				if val > 30000 && val < 90000 {
-					c96 = append(c96, numStr)
-					if len(c96) == 2 { break }
-				}
-			}
-			break
-		}
-	}
-
-	if len(c96) >= 2 { result.Buy96, result.Sell96 = sortTwo(c96[0], c96[1]) }
-	if len(cSpot) >= 2 { result.SpotBid, result.SpotAsk = sortTwo(cSpot[0], cSpot[1]) }
+	result.Buy96 = cleanNumber(buy96)
+	result.Sell96 = cleanNumber(sell96)
+	result.SpotBid = cleanNumber(spotBid)
+	result.SpotAsk = cleanNumber(spotAsk)
 
 	if result.Buy96 == "" { result.Buy96, result.Sell96 = "N/A", "N/A" }
 	if result.SpotBid == "" { result.SpotBid, result.SpotAsk = "N/A", "N/A" }
@@ -209,10 +191,27 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	return result, nil
 }
 
-func sortTwo(a, b string) (string, string) {
-	fa, fb := parseToFloat(a), parseToFloat(b)
-	if fa > fb { return b, a }
-	return a, b
+func cleanNumber(s string) string {
+	res := ""
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || r == '.' { res += string(r) }
+	}
+	if strings.Contains(s, ",") && !strings.Contains(res, ".") {
+		// กรณีเป็นเลขหลักหมื่นทองไทยที่ไม่มีทศนิยม
+		return addCommaStr(res) 
+	}
+	return res
+}
+
+func addCommaStr(s string) string {
+	if len(s) <= 3 { return s }
+	res := ""
+	for i, j := len(s)-1, 0; i >= 0; i-- {
+		res = string(s[i]) + res
+		j++
+		if j == 3 && i > 0 { res = "," + res; j = 0 }
+	}
+	return res
 }
 
 func updateHistoryLogic(newData MTSData) {
@@ -245,8 +244,7 @@ func parseToFloat(s string) float64 {
 
 func addCommaFloat(n float64) string {
 	parts := strings.Split(fmt.Sprintf("%.2f", n), ".")
-	intPart := parts[0]
-	decPart := parts[1]
+	intPart, decPart := parts[0], parts[1]
 	nStr := ""
 	for i, j := len(intPart)-1, 0; i >= 0; i-- {
 		nStr = string(intPart[i]) + nStr
