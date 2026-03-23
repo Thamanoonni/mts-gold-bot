@@ -22,13 +22,11 @@ const (
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
 	HistoryFile      = "gold_history.json"
 	
-	// 🎯 ราคาเป้าหมายทอง 96.5% 
-	TargetBuy96      = 65000.0
+	TargetBuy96      = 65000.0 // ราคาเป้าหมาย
 )
 
 var bot *tgbotapi.BotAPI
 
-// โครงสร้างข้อมูลเหลือแค่ 96.5%
 type MTSData struct {
 	Buy  string `json:"buy"`
 	Sell string `json:"sell"`
@@ -42,6 +40,9 @@ type HistoryStore struct {
 
 var history HistoryStore
 
+// สร้างตัวแปรโซนเวลาประเทศไทย (UTC+7)
+var bkkZone = time.FixedZone("BKK", 7*3600)
+
 func main() {
 	history = loadHistory()
 	var err error
@@ -52,10 +53,9 @@ func main() {
 
 	fmt.Println("🤖 Bot Online:", bot.Self.UserName)
 
-	// 🌐 ระบบจำลอง Web Server สำหรับ Render
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Bot (96.5%) is Running!"))
+			w.Write([]byte("MTS Gold Bot is Active!"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" {
@@ -64,7 +64,6 @@ func main() {
 		http.ListenAndServe(":"+port, nil)
 	}()
 
-	// ⏰ ระบบแจ้งเตือนรายชั่วโมง
 	go func() {
 		processAndSend()
 		ticker := time.NewTicker(1 * time.Hour)
@@ -73,7 +72,6 @@ func main() {
 		}
 	}()
 
-	// 👂 รอรับคำสั่งจากแชท
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
@@ -97,7 +95,6 @@ func processAndSend() {
 	} else {
 		updateHistoryLogic(newData)
 
-		// 🎯 เช็คราคาร่วงถึงเป้าหมาย
 		currentBuy := parseToFloat(newData.Buy)
 		if currentBuy > 0 && currentBuy <= TargetBuy96 {
 			alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงเป้าแล้วครับ!** 🚨\n\n"+
@@ -117,11 +114,13 @@ func processAndSend() {
 			diffBuy, diffSell = "(🆕)", "(🆕)"
 		}
 
-		// 📝 สรุปข้อความแบบกระชับ (เฉพาะ 96.5%)
+		// ใช้เวลาไทยในการแสดงผล
+		timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
+
 		text = fmt.Sprintf("🏆 **ราคาทอง MTS Gold (96.5%%)**\n📅 %s\n(เทียบราคาปิดเมื่อวาน)\n\n"+
 			"🟢 รับซื้อ: %s %s\n"+
 			"🔴 ขายออก: %s %s",
-			time.Now().Format("02/01/2006 15:04"),
+			timeNowTH,
 			newData.Buy, diffBuy,
 			newData.Sell, diffSell,
 		)
@@ -148,18 +147,19 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	var htmlContent string
+	var bodyText string
+	// 🎯 เปลี่ยนกลับมาดึงเฉพาะ "ข้อความที่ตาเห็น" (Text) ไม่อ่าน HTML
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second),
-		chromedp.OuterHTML("html", &htmlContent),
+		chromedp.Sleep(4*time.Second),
+		chromedp.Text(`body`, &bodyText, chromedp.ByQuery),
 	)
 	if err != nil {
 		return result, err
 	}
 
-	lines := strings.Split(htmlContent, "\n")
+	lines := strings.Split(bodyText, "\n")
 	var startIndex = -1
 	for i, line := range lines {
 		if strings.Contains(line, "รับซื้อ") {
@@ -174,7 +174,6 @@ func scrapeMTSWithChrome() (MTSData, error) {
 
 	prices := extractPrices(lines, startIndex)
 	
-	// ใช้แค่ 2 ตัวแรก (รับซื้อ และ ขายออก ของ 96.5%)
 	if len(prices) >= 2 {
 		result.Buy = prices[0]
 		result.Sell = prices[1]
@@ -186,11 +185,12 @@ func scrapeMTSWithChrome() (MTSData, error) {
 
 func extractPrices(lines []string, startIndex int) []string {
 	var candidates []string
-	for j := 0; j < 60 && startIndex+j < len(lines); j++ {
-		cleanLine := strings.TrimSpace(stripHTMLTags(lines[startIndex+j]))
+	for j := 0; j < 40 && startIndex+j < len(lines); j++ {
+		cleanLine := strings.TrimSpace(lines[startIndex+j])
 		if cleanLine == "" {
 			continue
 		}
+		// ดึงเฉพาะตัวเลขออกมาเช็ค
 		cleanW := strings.ReplaceAll(cleanLine, ",", "")
 		cleanW = strings.ReplaceAll(cleanW, ".", "")
 		if isNumeric(cleanW) && len(cleanW) >= 4 {
@@ -200,26 +200,9 @@ func extractPrices(lines []string, startIndex int) []string {
 	return candidates
 }
 
-func stripHTMLTags(s string) string {
-	inTag := false
-	var result strings.Builder
-	for _, char := range s {
-		if char == '<' {
-			inTag = true
-			continue
-		} else if char == '>' {
-			inTag = false
-			continue
-		}
-		if !inTag {
-			result.WriteRune(char)
-		}
-	}
-	return result.String()
-}
-
 func updateHistoryLogic(newData MTSData) {
-	todayStr := time.Now().Format("2006-01-02")
+	// ใช้เวลาไทยในการเช็คการข้ามวัน
+	todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 	if history.CurrentDate == "" {
 		history.CurrentDate = todayStr
 		history.LastSeenData = newData
