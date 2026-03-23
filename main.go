@@ -21,9 +21,13 @@ const (
 	TelegramChatID   = 8490072815
 	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
 	HistoryFile      = "gold_history.json"
-	
-	TargetBuy96      = 65000.0 // 🎯 ราคาเป้าหมายทอง 96.5%
 )
+
+// 🎯 ตั้งราคาเป้าหมายหลายระดับ (เพิ่ม/ลด ตัวเลขในปีกกาได้เลยครับ คั่นด้วยลูกน้ำ)
+var TargetPrices = []float64{67500.0, 65000.0}
+
+// ระบบจดจำว่าวันนี้เคยเตือนราคานี้ไปหรือยัง (กันบอทสแปมข้อความ)
+var alertedToday = make(map[float64]string)
 
 var bot *tgbotapi.BotAPI
 
@@ -89,21 +93,33 @@ func processAndSend() {
 	var text string
 
 	if err != nil {
-		// 🚨 แสดง Error ที่ได้จากบอทตรงๆ ให้เราเห็นในแชทเลย
-		text = "⚠️ **บอทมีปัญหาชั่วคราวครับ:**\n\n`" + err.Error() + "`"
+		text = "⚠️ เกิดข้อผิดพลาดในการดึงข้อมูล: `" + err.Error() + "`"
 	} else {
 		updateHistoryLogic(newData)
 
 		currentBuy := parseToFloat(newData.Buy)
-		if currentBuy > 0 && currentBuy <= TargetBuy96 {
-			alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงเป้าแล้วครับ!** 🚨\n\n"+
-				"ราคารับซื้อปัจจุบัน: **%s** บาท\n"+
-				"(เป้าหมายที่คุณตั้งไว้: %s บาท)\n\n"+
-				"เตรียมตัวช้อนได้เลยครับ!", newData.Buy, addCommaFloat(TargetBuy96))
+		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 
-			msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
-			msgAlert.ParseMode = "Markdown"
-			bot.Send(msgAlert)
+		if currentBuy > 0 {
+			// 🎯 วนลูปเช็คราคาเป้าหมายทีละไม้
+			for _, target := range TargetPrices {
+				if currentBuy <= target {
+					// เช็คว่าวันนี้เคยเตือนไม้ราคานี้ไปหรือยัง
+					if alertedToday[target] != todayStr {
+						alertText := fmt.Sprintf("🚨 **ALERT: ราคาทองร่วงถึงไม้เป้าหมายแล้ว!** 🚨\n\n"+
+							"ราคารับซื้อปัจจุบัน: **%s** บาท\n"+
+							"(เป้าหมายที่ตั้งไว้: %s บาท)\n\n"+
+							"เตรียมพิจารณาเข้าซื้อได้เลยครับคุณพ่อ!", newData.Buy, addCommaFloat(target))
+
+						msgAlert := tgbotapi.NewMessage(TelegramChatID, alertText)
+						msgAlert.ParseMode = "Markdown"
+						bot.Send(msgAlert)
+
+						// บันทึกไว้ว่าวันนี้เตือนราคานี้ไปแล้ว
+						alertedToday[target] = todayStr
+					}
+				}
+			}
 		}
 
 		diffBuy := getDiffText(newData.Buy, history.YesterdayData.Buy)
@@ -136,7 +152,6 @@ func scrapeMTSWithChrome() (MTSData, error) {
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		// 🎯 1. ใส่หน้ากาก! ปลอมตัวเป็นคอมพิวเตอร์คนใช้งานปกติ (Windows 10 + Chrome)
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 		chromedp.Flag("window-size", "1920,1080"),
 	)
@@ -152,70 +167,56 @@ func scrapeMTSWithChrome() (MTSData, error) {
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(5*time.Second), // 🎯 2. เพิ่มเวลารอให้ระบบหลังบ้านเว็บโหลดเสร็จ
-		// 🎯 3. ดึงข้อความดิบๆ ที่มนุษย์มองเห็นบนหน้าจอจริงๆ (แม่นยำกว่าดึง HTML)
+		chromedp.Sleep(4*time.Second),
 		chromedp.Evaluate(`document.body.innerText`, &bodyText),
 	)
-	
 	if err != nil {
 		return result, fmt.Errorf("เชื่อมต่อเว็บไม่ได้: %v", err)
 	}
 
-	lines := strings.Split(bodyText, "\n")
+	tokens := strings.Fields(bodyText)
 	var startIndex = -1
 	
-	for i, line := range lines {
-		if strings.Contains(line, "96.5") {
+	for i, token := range tokens {
+		if strings.Contains(token, "96.5") {
 			startIndex = i
 			break
 		}
 	}
 
 	if startIndex == -1 {
-		// 🚨 ระบบส่งภาพจำลอง: ถ้าหาไม่เจอ ให้ส่งข้อความที่บอทเห็นมาให้เราวิเคราะห์
-		debugMsg := bodyText
-		if len(debugMsg) > 300 {
-			debugMsg = debugMsg[:300] + "..." // ตัดให้สั้นเดี๋ยวรกแชท
-		}
-		return result, fmt.Errorf("ไม่พบคำว่า '96.5' บนเว็บตอนนี้\n\n🔍 สิ่งที่บอทเห็น:\n%s", debugMsg)
+		return result, fmt.Errorf("ไม่พบคำว่า '96.5' บนเว็บ")
 	}
 
-	prices := extractPrices(lines, startIndex)
+	var candidates []string
+	for j := startIndex; j < len(tokens) && j < startIndex+30; j++ {
+		cleanToken := strings.ReplaceAll(tokens[j], ",", "")
+		cleanToken = strings.ReplaceAll(cleanToken, ".", "")
+		
+		if isNumeric(cleanToken) {
+			val := parseToFloat(cleanToken)
+			if val > 20000 && val < 100000 {
+				candidates = append(candidates, tokens[j])
+				if len(candidates) == 2 {
+					break 
+				}
+			}
+		}
+	}
 	
-	if len(prices) >= 2 {
-		result.Buy = prices[0]
-		result.Sell = prices[1]
+	if len(candidates) >= 2 {
+		result.Buy = candidates[0]
+		result.Sell = candidates[1]
 		
 		buyF := parseToFloat(result.Buy)
 		sellF := parseToFloat(result.Sell)
 		if buyF > sellF && sellF > 0 {
 			result.Buy, result.Sell = result.Sell, result.Buy
 		}
-		
 		return result, nil
 	}
 
-	return result, fmt.Errorf("หาตัวเลขราคาไม่พบ (ได้มา %d ค่า)", len(prices))
-}
-
-func extractPrices(lines []string, startIndex int) []string {
-	var candidates []string
-	for j := 0; j < 40 && startIndex+j < len(lines); j++ {
-		cleanLine := strings.TrimSpace(lines[startIndex+j])
-		if cleanLine == "" {
-			continue
-		}
-		
-		cleanForCheck := strings.ReplaceAll(cleanLine, ",", "")
-		cleanForCheck = strings.ReplaceAll(cleanForCheck, ".", "")
-		if isNumeric(cleanForCheck) {
-			val := parseToFloat(cleanForCheck)
-			if val > 20000 {
-				candidates = append(candidates, cleanLine)
-			}
-		}
-	}
-	return candidates
+	return result, fmt.Errorf("หาตัวเลขเจอ %d ตัว", len(candidates))
 }
 
 func updateHistoryLogic(newData MTSData) {
