@@ -1,26 +1,25 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/chromedp/chromedp"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
-	TargetURL        = "https://www.mtsgold.co.th/mts-price-sm/"
-	HistoryFile      = "gold_history_v5.json"
+	// เจาะจงไปที่ API ราคาของ MTS โดยตรง (ไม่ต้องเปิด Browser)
+	APIURL      = "https://www.mtsgold.co.th/mts-price-sm/p/price.php"
+	HistoryFile = "gold_history_v6.json"
 )
 
 var TargetPrices96 = []float64{67500.0, 65000.0}
@@ -37,17 +36,9 @@ type MTSData struct {
 	SpotAsk string `json:"spot_ask"`
 }
 
-type HistoryStore struct {
-	CurrentDate   string  `json:"current_date"`
-	YesterdayData MTSData `json:"yesterday_data"`
-	LastSeenData  MTSData `json:"last_seen_data"`
-}
-
-var history HistoryStore
 var bkkZone = time.FixedZone("BKK", 7*3600)
 
 func main() {
-	history = loadHistory()
 	var err error
 	bot, err = tgbotapi.NewBotAPI(TelegramBotToken)
 	if err != nil {
@@ -56,7 +47,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Bot V5 is running"))
+			w.Write([]byte("MTS Gold API-Bot V6 is running"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -65,7 +56,7 @@ func main() {
 
 	go func() {
 		processAndSend()
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(30 * time.Minute) // ปรับมาเช็คทุก 30 นาที
 		for range ticker.C {
 			processAndSend()
 		}
@@ -84,15 +75,14 @@ func main() {
 }
 
 func processAndSend() {
-	newData, err := scrapeMTS()
+	newData, err := fetchDataFromAPI()
 	if err != nil {
-		bot.Send(tgbotapi.NewMessage(TelegramChatID, "⚠️ Error: "+err.Error()))
+		bot.Send(tgbotapi.NewMessage(TelegramChatID, "⚠️ API Error: "+err.Error()))
 		return
 	}
-	updateHistoryLogic(newData)
 	
 	timeNowTH := time.Now().In(bkkZone).Format("02/01/2006 15:04")
-	text := fmt.Sprintf("🏆 **รายงานราคาทองคำ (2 ระบบ)**\n📅 %s\n\n"+
+	text := fmt.Sprintf("🏆 **รายงานราคาทองคำ (Dime! & MTS)**\n📅 %s\n\n"+
 		"🇹🇭 **ทองไทย 96.5%%**\n"+
 		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n"+
@@ -100,112 +90,75 @@ func processAndSend() {
 		timeNowTH, newData.Buy96, newData.Sell96, newData.SpotBid, newData.SpotAsk,
 	)
 
+	// ระบบ Alert (เหมือนเดิม)
+	currentSpotAsk := parseToFloat(newData.SpotAsk)
+	todayStr := time.Now().In(bkkZone).Format("2006-01-02")
+	for _, target := range TargetSpotPrices {
+		if alertedSpotToday[target] != todayStr {
+			if target < 4189 && currentSpotAsk <= target && currentSpotAsk > 0 {
+				sendAlert(fmt.Sprintf("🚨 **ALERT: ทองโลกย่อถึงไม้ช้อน!**\n\nราคา: **%s** USD\nเป้า: %s USD", newData.SpotAsk, fmt.Sprintf("%.2f", target)))
+				alertedSpotToday[target] = todayStr
+			}
+			if target > 4189 && currentSpotAsk >= target {
+				sendAlert(fmt.Sprintf("🚀 **ALERT: ทองโลกพุ่งทะลุแนวต้าน!**\n\nราคา: **%s** USD\nเป้า: %s USD", newData.SpotAsk, fmt.Sprintf("%.2f", target)))
+				alertedSpotToday[target] = todayStr
+			}
+		}
+	}
+
 	msg := tgbotapi.NewMessage(TelegramChatID, text)
 	msg.ParseMode = "Markdown"
 	bot.Send(msg)
 }
 
-func scrapeMTS() (MTSData, error) {
+func sendAlert(msgText string) {
+	msg := tgbotapi.NewMessage(TelegramChatID, msgText)
+	msg.ParseMode = "Markdown"
+	bot.Send(msg)
+}
+
+func fetchDataFromAPI() (MTSData, error) {
 	var result MTSData
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-	)
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	var bodyText string
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(TargetURL),
-		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(10*time.Second),
-		chromedp.Evaluate(`document.body.innerText`, &bodyText),
-	)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(APIURL)
 	if err != nil { return result, err }
+	defer resp.Body.Close()
 
-	re := regexp.MustCompile(`[0-9,.]+`)
-	tokens := strings.Fields(bodyText)
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
 
-	var c96 []string
-	var cSpot []string
-
-	for i, t := range tokens {
-		// หา 96.5%
-		if strings.Contains(t, "96.5") {
-			for j := i + 1; j < i+10 && j < len(tokens); j++ {
-				num := re.FindString(tokens[j])
-				val := parseToFloat(num)
-				if val > 30000 && val < 90000 {
-					c96 = append(c96, formatWithComma(val))
-					if len(c96) == 2 { break }
-				}
-			}
-		}
-		// หา Spot (อิงคำว่า Spot หรือสัญลักษณ์ $)
-		if strings.Contains(strings.ToLower(t), "spot") || strings.Contains(t, "$") {
-			for j := i + 1; j < i+10 && j < len(tokens); j++ {
-				num := re.FindString(tokens[j])
-				val := parseToFloat(num)
-				if val > 3000 && val < 6000 {
-					cSpot = append(cSpot, fmt.Sprintf("%.2f", val))
-					if len(cSpot) == 2 { break }
-				}
-			}
-		}
-	}
-
-	if len(c96) >= 2 { result.Buy96, result.Sell96 = sortStr(c96[0], c96[1]) } else { result.Buy96, result.Sell96 = "N/A", "N/A" }
-	if len(cSpot) >= 2 { result.SpotBid, result.SpotAsk = sortStr(cSpot[0], cSpot[1]) } else { result.SpotBid, result.SpotAsk = "N/A", "N/A" }
+	// เนื่องจาก API นี้อาจจะส่งมาเป็นก้อนข้อความ/HTML เราจะใช้การดึงค่าแบบง่ายๆ
+	result.Buy96 = findValue(bodyStr, "96.5", 0)
+	result.Sell96 = findValue(bodyStr, "96.5", 1)
+	result.SpotBid = findValue(bodyStr, "Spot", 0)
+	result.SpotAsk = findValue(bodyStr, "Spot", 1)
 
 	return result, nil
 }
 
-func sortStr(a, b string) (string, string) {
-	if parseToFloat(a) > parseToFloat(b) { return b, a }
-	return a, b
-}
-
-func formatWithComma(n float64) string {
-	s := strconv.FormatFloat(n, 'f', 0, 64)
-	res := ""
-	for i, j := len(s)-1, 0; i >= 0; i-- {
-		res = string(s[i]) + res
-		j++
-		if j == 3 && i > 0 { res = "," + res; j = 0 }
+func findValue(data, key string, order int) string {
+	// Logic การหาตัวเลขที่อยู่หลังคำสำคัญ
+	idx := strings.Index(data, key)
+	if idx == -1 { return "N/A" }
+	
+	sub := data[idx:]
+	parts := strings.Fields(sub)
+	count := 0
+	for _, p := range parts {
+		clean := ""
+		for _, r := range p {
+			if (r >= '0' && r <= '9') || r == '.' || r == ',' { clean += string(r) }
+		}
+		if len(clean) > 3 {
+			if count == order { return clean }
+			count++
+		}
 	}
-	return res
+	return "N/A"
 }
 
 func parseToFloat(s string) float64 {
 	clean := strings.ReplaceAll(s, ",", "")
 	val, _ := strconv.ParseFloat(clean, 64)
 	return val
-}
-
-func updateHistoryLogic(newData MTSData) {
-	todayStr := time.Now().In(bkkZone).Format("2006-01-02")
-	if history.CurrentDate != todayStr {
-		history.YesterdayData = history.LastSeenData
-		history.CurrentDate = todayStr
-	}
-	history.LastSeenData = newData
-	saveHistory(history)
-}
-
-func loadHistory() HistoryStore {
-	var h HistoryStore
-	file, err := os.ReadFile(HistoryFile)
-	if err == nil { json.Unmarshal(file, &h) }
-	return h
-}
-
-func saveHistory(h HistoryStore) {
-	data, _ := json.MarshalIndent(h, "", " ")
-	os.WriteFile(HistoryFile, data, 0644)
 }
