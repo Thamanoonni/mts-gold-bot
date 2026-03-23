@@ -58,7 +58,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("MTS Gold Dual-Bot (V4 Precision) is Active!"))
+			w.Write([]byte("MTS Gold Dual-Bot (V4.1 Fixed) is Active!"))
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -95,7 +95,6 @@ func processAndSend() {
 		updateHistoryLogic(newData)
 		todayStr := time.Now().In(bkkZone).Format("2006-01-02")
 
-		// 🚨 ระบบแจ้งเตือน (เหมือนเดิม)
 		currentSpotAsk := parseToFloat(newData.SpotAsk)
 		if currentSpotAsk > 0 {
 			for _, target := range TargetSpotPrices {
@@ -153,31 +152,17 @@ func scrapeMTSWithPrecision() (MTSData, error) {
 
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(TargetURL),
-		chromedp.WaitVisible(`#table-price-all`, chromedp.ByQuery), // รอตารางราคาโหลด
-		chromedp.Sleep(10*time.Second), // ให้เวลา Widget คำนวณราคานิดนึงครับ
-		// 🎯 จิ้มเอาตัวเลขจากกล่องราคาโดยตรง (CSS Selectors)
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Sleep(12*time.Second), 
 		chromedp.Text(`.price-965-buy`, &buy96, chromedp.ByQuery),
 		chromedp.Text(`.price-965-sell`, &sell96, chromedp.ByQuery),
 		chromedp.Text(`.price-spot-buy`, &spotBid, chromedp.ByQuery),
 		chromedp.Text(`.price-spot-sell`, &spotAsk, chromedp.ByQuery),
 	)
-
-	// ถ้าวิธีแรกไม่ได้ผล (Class name เปลี่ยน) ให้ใช้แผนสำรองกวาดตามหาเหมือนเดิมแต่เข้มข้นขึ้น
-	if spotAsk == "" || spotAsk == "-" {
-		var bodyText string
-		chromedp.Run(ctx, chromedp.Evaluate(`document.body.innerText`, &bodyText))
-		tokens := strings.Fields(bodyText)
-		for i, t := range tokens {
-			if strings.Contains(t, "$") || strings.Contains(strings.ToLower(t), "spot") {
-				for j := i; j < i+10 && j < len(tokens); j++ {
-					clean := cleanNumber(tokens[j])
-					v, _ := strconv.ParseFloat(clean, 64)
-					if v > 3000 && v < 6000 {
-						if spotBid == "" { spotBid = clean } else if spotAsk == "" { spotAsk = clean; break }
-					}
-				}
-			}
-		}
+	
+	// ถึงแม้จะ error เราก็จะพยายามแสดงค่าเท่าที่ดึงได้ครับ
+	if err != nil {
+		fmt.Println("Warning: Scraping error:", err)
 	}
 
 	result.Buy96 = cleanNumber(buy96)
@@ -197,7 +182,6 @@ func cleanNumber(s string) string {
 		if (r >= '0' && r <= '9') || r == '.' { res += string(r) }
 	}
 	if strings.Contains(s, ",") && !strings.Contains(res, ".") {
-		// กรณีเป็นเลขหลักหมื่นทองไทยที่ไม่มีทศนิยม
 		return addCommaStr(res) 
 	}
 	return res
