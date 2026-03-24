@@ -16,8 +16,6 @@ import (
 const (
 	TelegramBotToken = "8479186732:AAEtkVtmzwCu4yI5a-HvBBlaVjnI5djvAA8"
 	TelegramChatID   = 8490072815
-	ThaiGoldURL      = "https://www.goldtraders.or.th/"
-	SpotGoldURL      = "https://api.coinbase.com/v2/prices/XAU-USD/spot"
 )
 
 var bkkZone = time.FixedZone("BKK", 7*3600)
@@ -30,7 +28,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold Bot V8.0 - Active")
+			fmt.Fprintf(w, "Gold & Stock Bot V9.0 - Active")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -44,36 +42,48 @@ func main() {
 	for update := range updates {
 		if update.Message == nil { continue }
 		txt := strings.ToLower(update.Message.Text)
-		if txt == "ราคา" || txt == "price" || txt == "gold" {
+		if txt == "ราคา" || txt == "price" || txt == "gold" || txt == "stock" {
 			fetchAndReport(bot)
 		}
 	}
 }
 
 func fetchAndReport(bot *tgbotapi.BotAPI) {
-	thaiBuy, thaiSell := fetchThaiGold()
-	spotPrice := fetchSpotGold()
-
 	timeNow := time.Now().In(bkkZone).Format("02/01/2006 15:04")
 	
-	profitText := ""
-	currentSpot := parseToFloat(spotPrice)
-	// ทุนของคุณพ่อคือ 4,189.92
-	if currentSpot > 0 {
-		diff := currentSpot - 4189.92
-		if diff > 0 {
-			profitText = fmt.Sprintf("\n📈 **กำไรไม้แรก: +%.2f USD**", diff)
-		} else {
-			profitText = fmt.Sprintf("\n📉 **ไม้แรกติดลบ: %.2f USD**", diff)
+	// --- ดึงข้อมูลทอง ---
+	thaiBuy, thaiSell := fetchThaiGold()
+	spotPrice := fetchSpotGold()
+	
+	// คำนวณกำไรทอง (ทุน 4,189.92)
+	profitGold := ""
+	if s := strings.ReplaceAll(spotPrice, ",", ""); s != "N/A" {
+		if cur, err := fmt.Sscanf(s, "%f", new(float64)); err == nil || cur > 0 {
+			// ดึงค่ามาคำนวณแบบง่ายๆ
+			re := regexp.MustCompile(`[0-9.]+`)
+			valStr := re.FindString(s)
+			var val float64
+			fmt.Sscanf(valStr, "%f", &val)
+			diff := val - 4189.92
+			if diff > 0 { profitGold = fmt.Sprintf("\n📈 **กำไรทอง: +%.2f USD**", diff) } else { profitGold = fmt.Sprintf("\n📉 **ทองติดลบ: %.2f USD**", diff) }
 		}
 	}
 
-	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V8.0)**\n📅 %s\n\n"+
+	// --- ดึงข้อมูลหุ้น ---
+	stocks := []string{"TTW", "SCB", "TISCO", "WHAIR"}
+	stockReport := ""
+	for _, s := range stocks {
+		price := fetchStockPrice(s)
+		stockReport += fmt.Sprintf("🔹 %-6s: **%s** บาท\n", s, price)
+	}
+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน**\n📅 %s\n\n"+
 		"🇹🇭 **ทองไทย (สมาคมฯ)**\n"+
-		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
+		"🟢 ซื้อ: %s | 🔴 ขาย: %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n"+
-		"💰 ราคาปัจจุบัน: **%s** USD/oz%s",
-		timeNow, thaiBuy, thaiSell, spotPrice, profitText,
+		"💰 ราคา: **%s** USD%s\n\n"+
+		"📈 **พอร์ตหุ้นปันผล**\n%s",
+		timeNow, thaiBuy, thaiSell, spotPrice, profitGold, stockReport,
 	)
 
 	msg := tgbotapi.NewMessage(TelegramChatID, report)
@@ -82,48 +92,39 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 }
 
 func fetchThaiGold() (string, string) {
-	content := getSimpleHTML(ThaiGoldURL)
+	content := getHTML("https://www.goldtraders.or.th/")
 	re := regexp.MustCompile(`[0-9]{2},[0-9]{3}`)
-	matches := re.FindAllString(content, -1)
-	if len(matches) >= 2 {
-		return matches[0], matches[1]
-	}
+	m := re.FindAllString(content, -1)
+	if len(m) >= 2 { return m[0], m[1] }
 	return "N/A", "N/A"
 }
 
 func fetchSpotGold() string {
-	content := getSimpleHTML(SpotGoldURL)
+	content := getHTML("https://api.coinbase.com/v2/prices/XAU-USD/spot")
 	re := regexp.MustCompile(`"amount":"([0-9.]+)"`)
-	match := re.FindStringSubmatch(content)
-	if len(match) > 1 {
-		return match[1]
-	}
+	m := re.FindStringSubmatch(content)
+	if len(m) > 1 { return m[1] }
 	return "N/A"
 }
 
-func getSimpleHTML(target string) string {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, errReq := http.NewRequest("GET", target, nil)
-	if errReq != nil {
-		return ""
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	
-	resp, errDo := client.Do(req)
-	if errDo != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	
-	body, errRead := io.ReadAll(resp.Body)
-	if errRead != nil {
-		return ""
-	}
-	return string(body)
+func fetchStockPrice(symbol string) string {
+	// ดึงราคาจาก SET ผ่านหน้าเว็บแบบง่าย
+	url := fmt.Sprintf("https://www.set.or.th/th/market/product/stock/quote/%s/price", symbol)
+	content := getHTML(url)
+	// ค้นหาราคาล่าสุดใน HTML (Logic แบบกวาดหาตัวเลขหลังข้อความราคาล่าสุด)
+	re := regexp.MustCompile(`"lastPrice":([0-9.]+)`)
+	m := re.FindStringSubmatch(content)
+	if len(m) > 1 { return m[1] }
+	return "รอตลาด"
 }
 
-func parseToFloat(s string) float64 {
-	clean := strings.ReplaceAll(s, ",", "")
-	val, _ := strconv.ParseFloat(clean, 64)
-	return val
+func getHTML(url string) string {
+	c := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := c.Do(req)
+	if err != nil { return "" }
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
 }
