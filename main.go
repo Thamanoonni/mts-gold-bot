@@ -30,7 +30,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold Bot V7.3 - Live")
+			fmt.Fprintf(w, "Gold Bot V8.0 - Active")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -58,6 +58,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 	
 	profitText := ""
 	currentSpot := parseToFloat(spotPrice)
+	// ทุนของคุณพ่อคือ 4,189.92
 	if currentSpot > 0 {
 		diff := currentSpot - 4189.92
 		if diff > 0 {
@@ -67,7 +68,7 @@ func fetchAndReport(bot *tgbotapi.BotAPI) {
 		}
 	}
 
-	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V7.3)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาทองคำ (V8.0)**\n📅 %s\n\n"+
 		"🇹🇭 **ทองไทย (สมาคมฯ)**\n"+
 		"🟢 รับซื้อ: %s\n🔴 ขายออก: %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n"+
@@ -102,17 +103,22 @@ func fetchSpotGold() string {
 
 func getSimpleHTML(target string) string {
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, _ := http.NewRequest("GET", target, nil)
+	req, errReq := http.NewRequest("GET", target, nil)
+	if errReq != nil {
+		return ""
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	
-	// ใช้ _ แทน err เพื่อให้ Build ผ่านแน่นอนครับ
-	resp, _ := client.Do(req)
-	if resp == nil {
+	resp, errDo := client.Do(req)
+	if errDo != nil {
 		return ""
 	}
 	defer resp.Body.Close()
 	
-	body, _ := io.ReadAll(resp.Body)
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return ""
+	}
 	return string(body)
 }
 
