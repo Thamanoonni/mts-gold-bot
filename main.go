@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V9.6 - Active")
+			fmt.Fprintf(w, "Gold & Stock Bot V9.7 - Running")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -50,18 +50,18 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bkk, _ := time.LoadLocation("Asia/Bangkok")
 	timeNow := time.Now().In(bkk).Format("02/01/2006 15:04")
 	
-	// ดึงราคาหุ้นทีละตัว (Yahoo Finance)
-	ttw := fetchStock("TTW.BK")
-	scb := fetchStock("SCB.BK")
-	tisco := fetchStock("TISCO.BK")
-	neo := fetchStock("NEO.BK")
-	nyt := fetchStock("NYT.BK")
-	whair := fetchStock("WHAIR.BK")
+	// ดึงราคาหุ้น
+	ttw := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/TTW.BK")
+	scb := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/SCB.BK")
+	tisco := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/TISCO.BK")
+	neo := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/NEO.BK")
+	nyt := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/NYT.BK")
+	whair := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/WHAIR.BK")
 	
-	// ดึงราคาทอง Spot (ใช้ Coinbase API ตัวที่เสถียรที่สุด)
-	spot := fetchGoldSpot()
+	// ดึงราคาทอง Spot จาก Binance API (PAXG/USDT = 1 oz Gold)
+	spot := fetchGoldBinance()
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.6)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.7)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -78,8 +78,7 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bot.Send(msg)
 }
 
-func fetchStock(symbol string) string {
-	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
+func fetchPrice(url string) string {
 	content := getRaw(url)
 	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
 	m := re.FindStringSubmatch(content)
@@ -87,13 +86,18 @@ func fetchStock(symbol string) string {
 	return "N/A"
 }
 
-func fetchGoldSpot() string {
-	// ใช้ API ตรงของ Coinbase ซึ่งเป็น Public API ไม่โดนบล็อก
-	url := "https://api.coinbase.com/v2/prices/XAU-USD/spot"
+func fetchGoldBinance() string {
+	// ใช้ Binance API ดึงราคา PAXG (ซึ่งผูกกับราคาทองคำจริง 1:1)
+	url := "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
 	content := getRaw(url)
-	re := regexp.MustCompile(`"amount":"([0-9.]+)"`)
+	re := regexp.MustCompile(`"price":"([0-9.]+)"`)
 	m := re.FindStringSubmatch(content)
-	if len(m) > 1 { return m[1] }
+	if len(m) > 1 { 
+		// ตัดทศนิยมให้เหลือ 2 ตำแหน่งเพื่อความสวยงาม
+		var val float64
+		fmt.Sscanf(m[1], "%f", &val)
+		return fmt.Sprintf("%.2f", val)
+	}
 	return "N/A"
 }
 
