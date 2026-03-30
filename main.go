@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V9.3 - Ready")
+			fmt.Fprintf(w, "Gold & Stock Bot V9.4 - Ready")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -50,18 +50,18 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bkk, _ := time.LoadLocation("Asia/Bangkok")
 	timeNow := time.Now().In(bkk).Format("02/01/2006 15:04")
 	
-	// ดึงราคาหุ้นทีละตัว (ใช้ Yahoo Finance API)
+	// ดึงราคาหุ้น
 	ttw := fetchStock("TTW")
 	scb := fetchStock("SCB")
 	tisco := fetchStock("TISCO")
-	whair := fetchStock("WHAIR")
 	neo := fetchStock("NEO")
 	nyt := fetchStock("NYT")
+	whair := fetchStock("WHAIR")
 	
-	// ดึงราคาทอง Spot
+	// ดึงราคาทอง Spot (แหล่งใหม่)
 	spot := fetchSpot()
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.3)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.4)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -88,17 +88,19 @@ func fetchStock(symbol string) string {
 }
 
 func fetchSpot() string {
-	content := getRawHTML("https://api.coinbase.com/v2/prices/XAU-USD/spot")
-	re := regexp.MustCompile(`"amount":"([0-9.]+)"`)
+	// เปลี่ยนมาดึงผ่าน Yahoo Finance แทน (สัญลักษณ์ GC=F คือทองคำ)
+	url := "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
+	content := getRawHTML(url)
+	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
 	m := re.FindStringSubmatch(content)
 	if len(m) > 1 { return m[1] }
 	return "N/A"
 }
 
 func getRawHTML(url string) string {
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	resp, err := client.Do(req)
 	if err != nil { return "" }
 	defer resp.Body.Close()
