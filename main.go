@@ -77,8 +77,8 @@ func sendReport(bot *tgbotapi.BotAPI) {
 		"🔹 NYT    : **%s** บาท (เป้า: 4.10)\n"+
 		"🔹 ROJNA  : **%s** บาท (เป้า: 5.00)\n"+
 		"🔹 PTT    : **%s** บาท (เป้า: 32.50)\n"+
-		"🔹 ADVANC : **%s** บาท (เป้า: 205.00)\n"+
-		"🔹 AP     : **%s** บาท (เป้า: 10.50)",
+		"🔹 ADVANC : **%s** บาท (เป้า: 360.00)\n"+
+		"🔹 AP     : **%s** บาท (เป้า: 8.00)",
 		timeNow, spot, scb, tisco, ttw, whair, neo, nyt, rojna, ptt, advanc, ap,
 	)
 
