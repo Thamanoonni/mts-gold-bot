@@ -77,7 +77,7 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	msg.ParseMode = "Markdown"
 	bot.Send(msg)
 }
-
+/*
 func getPrice(symbol string) string {
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
 	client := &http.Client{Timeout: 12 * time.Second}
@@ -98,6 +98,27 @@ func getPrice(symbol string) string {
 			}
 		}
 		time.Sleep(1 * time.Second) // รอแป๊บก่อนดึงใหม่
+	}
+	return "N/A"
+} */
+// (ส่วนต้นเหมือนเดิม เปลี่ยนแค่ฟังก์ชัน getPrice)
+func getPrice(symbol string) string {
+	// เพิ่มเลขสุ่มท้าย URL เพื่อป้องกัน Yahoo ส่งข้อมูลเก่า (Cache) มาให้
+	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1m&nocache=%d", symbol, time.Now().Unix())
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
+	
+	resp, err := client.Do(req)
+	if err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
+		m := re.FindStringSubmatch(string(body))
+		if len(m) > 1 {
+			return m[1]
+		}
 	}
 	return "N/A"
 }
