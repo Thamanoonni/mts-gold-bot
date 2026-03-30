@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V9.8 - Final Fix")
+			fmt.Fprintf(w, "Gold & Stock Bot V10.0 - Ready")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -50,16 +50,18 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bkk, _ := time.LoadLocation("Asia/Bangkok")
 	timeNow := time.Now().In(bkk).Format("02/01/2006 15:04")
 	
-	// ดึงราคาจาก Yahoo ชุดเดียวทั้งหมด (เพื่อความเสถียร)
+	// ดึงราคาหุ้น
 	ttw := getPrice("TTW.BK")
 	scb := getPrice("SCB.BK")
 	tisco := getPrice("TISCO.BK")
 	neo := getPrice("NEO.BK")
 	nyt := getPrice("NYT.BK")
 	whair := getPrice("WHAIR.BK")
-	spot := getPrice("GC=F") // ใช้ Gold Future แทน เพื่อให้ดึงผ่านแน่นอน
+	
+	// ดึงราคาทอง Spot (ดึงจาก CryptoCompare API - เสถียรและเป็น Spot จริง)
+	spot := getGoldSpot()
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.8)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V10.0)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -76,6 +78,23 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bot.Send(msg)
 }
 
+func getGoldSpot() string {
+	// ดึงราคา XAU/USD ผ่าน CryptoCompare API ซึ่งเสถียรมากสำหรับ Bot
+	url := "https://min-api.cryptocompare.com/data/price?fsym=XAU&tsyms=USD"
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil { return "N/A" }
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	re := regexp.MustCompile(`"USD":([0-9.]+)`)
+	m := re.FindStringSubmatch(string(body))
+	if len(m) > 1 {
+		return m[1]
+	}
+	return "N/A"
+}
+
 func getPrice(symbol string) string {
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -89,9 +108,6 @@ func getPrice(symbol string) string {
 	body, _ := io.ReadAll(resp.Body)
 	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
 	m := re.FindStringSubmatch(string(body))
-	
-	if len(m) > 1 {
-		return m[1]
-	}
+	if len(m) > 1 { return m[1] }
 	return "N/A"
 }
