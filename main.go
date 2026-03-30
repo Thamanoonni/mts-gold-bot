@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V10.2 - AntiDelay Active")
+			fmt.Fprintf(w, "Gold & Stock Bot V10.3 - Awake & Fast")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -41,7 +41,8 @@ func main() {
 		if update.Message == nil { continue }
 		txt := strings.ToLower(update.Message.Text)
 		if txt == "ราคา" || txt == "price" || txt == "gold" || txt == "stock" {
-			sendReport(bot)
+			// พระเอกอยู่ตรงนี้ครับ! ใช้ 'go' เพื่อสั่งให้บอทแยกไปดึงข้อมูล ไม่ค้างรอหน้าจอ
+			go sendReport(bot)
 		}
 	}
 }
@@ -58,7 +59,7 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	whair := getPrice("WHAIR.BK")
 	spot := getPrice("PAXG-USD")
 
-	report := fmt.Sprintf("🏆 **รายงานราคา (V10.2 Anti-Delay)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคา (V10.3 สายฟ้าแลบ)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -76,13 +77,11 @@ func sendReport(bot *tgbotapi.BotAPI) {
 }
 
 func getPrice(symbol string) string {
-	// เพิ่มพารามิเตอร์ random เพื่อกันข้อมูลเก่าค้าง
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1m&_=%d", symbol, time.Now().Unix())
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second} // ลด Timeout ลงเหลือ 5 วิ ไม่ต้องรอนาน
 	
 	for i := 0; i < 2; i++ {
 		req, _ := http.NewRequest("GET", url, nil)
-		// ใช้ User-Agent ที่ดูเป็นเครื่องรุ่นใหม่ขึ้น
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36")
 		
 		resp, err := client.Do(req)
@@ -95,7 +94,7 @@ func getPrice(symbol string) string {
 				return m[1]
 			}
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return "N/A"
 }
