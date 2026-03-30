@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V10.0 - Ready")
+			fmt.Fprintf(w, "Gold & Stock Bot V10.1 - Active")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -58,10 +58,10 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	nyt := getPrice("NYT.BK")
 	whair := getPrice("WHAIR.BK")
 	
-	// ดึงราคาทอง Spot (ดึงจาก CryptoCompare API - เสถียรและเป็น Spot จริง)
-	spot := getGoldSpot()
+	// ดึงราคาทอง Spot (ใช้ PAXG-USD จาก Yahoo เป็นตัวแทนทองโลก 1:1)
+	spot := getPrice("PAXG-USD")
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V10.0)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V10.1)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -78,36 +78,26 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bot.Send(msg)
 }
 
-func getGoldSpot() string {
-	// ดึงราคา XAU/USD ผ่าน CryptoCompare API ซึ่งเสถียรมากสำหรับ Bot
-	url := "https://min-api.cryptocompare.com/data/price?fsym=XAU&tsyms=USD"
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil { return "N/A" }
-	defer resp.Body.Close()
-	
-	body, _ := io.ReadAll(resp.Body)
-	re := regexp.MustCompile(`"USD":([0-9.]+)`)
-	m := re.FindStringSubmatch(string(body))
-	if len(m) > 1 {
-		return m[1]
-	}
-	return "N/A"
-}
-
 func getPrice(symbol string) string {
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	client := &http.Client{Timeout: 12 * time.Second}
 	
-	resp, err := client.Do(req)
-	if err != nil { return "N/A" }
-	defer resp.Body.Close()
-	
-	body, _ := io.ReadAll(resp.Body)
-	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
-	m := re.FindStringSubmatch(string(body))
-	if len(m) > 1 { return m[1] }
+	// ลองดึงสูงสุด 2 รอบเผื่อพลาด
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+		
+		resp, err := client.Do(req)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
+			m := re.FindStringSubmatch(string(body))
+			if len(m) > 1 {
+				return m[1]
+			}
+		}
+		time.Sleep(1 * time.Second) // รอแป๊บก่อนดึงใหม่
+	}
 	return "N/A"
 }
