@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V9.7 - Running")
+			fmt.Fprintf(w, "Gold & Stock Bot V9.8 - Final Fix")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -50,18 +50,16 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bkk, _ := time.LoadLocation("Asia/Bangkok")
 	timeNow := time.Now().In(bkk).Format("02/01/2006 15:04")
 	
-	// ดึงราคาหุ้น
-	ttw := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/TTW.BK")
-	scb := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/SCB.BK")
-	tisco := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/TISCO.BK")
-	neo := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/NEO.BK")
-	nyt := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/NYT.BK")
-	whair := fetchPrice("https://query1.finance.yahoo.com/v8/finance/chart/WHAIR.BK")
-	
-	// ดึงราคาทอง Spot จาก Binance API (PAXG/USDT = 1 oz Gold)
-	spot := fetchGoldBinance()
+	// ดึงราคาจาก Yahoo ชุดเดียวทั้งหมด (เพื่อความเสถียร)
+	ttw := getPrice("TTW.BK")
+	scb := getPrice("SCB.BK")
+	tisco := getPrice("TISCO.BK")
+	neo := getPrice("NEO.BK")
+	nyt := getPrice("NYT.BK")
+	whair := getPrice("WHAIR.BK")
+	spot := getPrice("GC=F") // ใช้ Gold Future แทน เพื่อให้ดึงผ่านแน่นอน
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.7)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V9.8)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -78,36 +76,22 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bot.Send(msg)
 }
 
-func fetchPrice(url string) string {
-	content := getRaw(url)
-	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
-	m := re.FindStringSubmatch(content)
-	if len(m) > 1 { return m[1] }
-	return "N/A"
-}
-
-func fetchGoldBinance() string {
-	// ใช้ Binance API ดึงราคา PAXG (ซึ่งผูกกับราคาทองคำจริง 1:1)
-	url := "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
-	content := getRaw(url)
-	re := regexp.MustCompile(`"price":"([0-9.]+)"`)
-	m := re.FindStringSubmatch(content)
-	if len(m) > 1 { 
-		// ตัดทศนิยมให้เหลือ 2 ตำแหน่งเพื่อความสวยงาม
-		var val float64
-		fmt.Sscanf(m[1], "%f", &val)
-		return fmt.Sprintf("%.2f", val)
-	}
-	return "N/A"
-}
-
-func getRaw(url string) string {
+func getPrice(symbol string) string {
+	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	
 	resp, err := client.Do(req)
-	if err != nil { return "" }
+	if err != nil { return "N/A" }
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return string(b)
+	
+	body, _ := io.ReadAll(resp.Body)
+	re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
+	m := re.FindStringSubmatch(string(body))
+	
+	if len(m) > 1 {
+		return m[1]
+	}
+	return "N/A"
 }
