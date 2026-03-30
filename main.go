@@ -26,7 +26,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Gold & Stock Bot V10.1 - Active")
+			fmt.Fprintf(w, "Gold & Stock Bot V10.2 - AntiDelay Active")
 		})
 		port := os.Getenv("PORT")
 		if port == "" { port = "8080" }
@@ -50,18 +50,15 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	bkk, _ := time.LoadLocation("Asia/Bangkok")
 	timeNow := time.Now().In(bkk).Format("02/01/2006 15:04")
 	
-	// ดึงราคาหุ้น
 	ttw := getPrice("TTW.BK")
 	scb := getPrice("SCB.BK")
 	tisco := getPrice("TISCO.BK")
 	neo := getPrice("NEO.BK")
 	nyt := getPrice("NYT.BK")
 	whair := getPrice("WHAIR.BK")
-	
-	// ดึงราคาทอง Spot (ใช้ PAXG-USD จาก Yahoo เป็นตัวแทนทองโลก 1:1)
 	spot := getPrice("PAXG-USD")
 
-	report := fmt.Sprintf("🏆 **รายงานราคาประจำวัน (V10.1)**\n📅 %s\n\n"+
+	report := fmt.Sprintf("🏆 **รายงานราคา (V10.2 Anti-Delay)**\n📅 %s\n\n"+
 		"🌎 **Gold Spot (Dime!)**\n💰 ราคา: **%s** USD/oz\n\n"+
 		"📈 **พอร์ตหุ้นปันผล**\n"+
 		"🔹 TTW   : **%s** บาท\n"+
@@ -77,15 +74,16 @@ func sendReport(bot *tgbotapi.BotAPI) {
 	msg.ParseMode = "Markdown"
 	bot.Send(msg)
 }
-/*
+
 func getPrice(symbol string) string {
-	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", symbol)
-	client := &http.Client{Timeout: 12 * time.Second}
+	// เพิ่มพารามิเตอร์ random เพื่อกันข้อมูลเก่าค้าง
+	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1m&_=%d", symbol, time.Now().Unix())
+	client := &http.Client{Timeout: 10 * time.Second}
 	
-	// ลองดึงสูงสุด 2 รอบเผื่อพลาด
 	for i := 0; i < 2; i++ {
 		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+		// ใช้ User-Agent ที่ดูเป็นเครื่องรุ่นใหม่ขึ้น
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36")
 		
 		resp, err := client.Do(req)
 		if err == nil {
@@ -97,28 +95,7 @@ func getPrice(symbol string) string {
 				return m[1]
 			}
 		}
-		time.Sleep(1 * time.Second) // รอแป๊บก่อนดึงใหม่
-	}
-	return "N/A"
-} */
-// (ส่วนต้นเหมือนเดิม เปลี่ยนแค่ฟังก์ชัน getPrice)
-func getPrice(symbol string) string {
-	// เพิ่มเลขสุ่มท้าย URL เพื่อป้องกัน Yahoo ส่งข้อมูลเก่า (Cache) มาให้
-	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1m&nocache=%d", symbol, time.Now().Unix())
-	client := &http.Client{Timeout: 10 * time.Second}
-	
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
-	
-	resp, err := client.Do(req)
-	if err == nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		re := regexp.MustCompile(`"regularMarketPrice":([0-9.]+)`)
-		m := re.FindStringSubmatch(string(body))
-		if len(m) > 1 {
-			return m[1]
-		}
+		time.Sleep(1 * time.Second)
 	}
 	return "N/A"
 }
